@@ -1,5 +1,7 @@
 # Minimal Anima T2I practice
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/main/anima_minimal_colab.ipynb)
+
 DiffSynth의 Anima T2I 계산 경로에서 필요한 모델 정의만 떼어낸 Colab 실습입니다.
 
 - **ComfyUI / Diffusers / DiffSynth 패키지를 설치하지 않습니다.**

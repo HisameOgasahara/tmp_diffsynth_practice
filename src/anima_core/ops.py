@@ -1,0 +1,36 @@
+import torch
+import torch.nn.functional as F
+from einops import rearrange
+
+
+def attention_forward(
+    q,
+    k,
+    v,
+    out_pattern="b n s d",
+    attn_mask=None,
+    scale=None,
+    is_causal=False,
+    **kwargs,
+):
+    out = F.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        attn_mask=attn_mask,
+        scale=scale,
+        is_causal=is_causal,
+    )
+    if out_pattern == "b n s d":
+        return out
+    return rearrange(out, f"b n s d -> {out_pattern}")
+
+
+def gradient_checkpoint_forward(
+    model,
+    use_gradient_checkpointing=False,
+    use_gradient_checkpointing_offload=False,
+    **kwargs,
+):
+    # This minimal repository is inference-only.
+    return model(**kwargs)

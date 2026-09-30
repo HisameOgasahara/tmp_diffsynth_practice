@@ -98,7 +98,10 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda"):
         # Qwen 결과만 캐시합니다. DiT 내부의 llm_adapter는 LoRA 학습 대상일 수 있습니다.
         for pair, record in tqdm(list(zip(pairs, records)), desc="텍스트 조건 캐시"):
             embeds, ids = encode_prompt(text_encoder, qwen, t5, pair["caption"], device=device, dtype=dtype)
-            tensors = load_file(str(cache_path / record["file"]))
+            # safetensors의 파일 매핑을 해제한 뒤 같은 파일에 저장합니다.
+            # Windows에서는 매핑된 파일에 덮어쓰면 os error 1224가 발생합니다.
+            tensors = {name: tensor.clone() for name, tensor in
+                       load_file(str(cache_path / record["file"])).items()}
             tensors.update(prompt_embeds=embeds[0].cpu().contiguous(), t5_ids=ids[0].cpu().contiguous())
             save_file(tensors, str(cache_path / record["file"]))
         embeds, ids = encode_prompt(text_encoder, qwen, t5, "", device=device, dtype=dtype)

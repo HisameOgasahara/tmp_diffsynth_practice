@@ -4,6 +4,12 @@
 
 PyTorch로 Anima의 diffusion / flow matching 이미지 생성 과정을 직접 다루는 실습 저장소입니다. DiffSynth에서 필요한 모델 정의를 분리했으며, ComfyUI·Diffusers·DiffSynth 설치 없이 실행합니다.
 
+## 생성 예시
+
+LoRA를 적용해 생성한 이미지입니다.
+
+![Anima LoRA 생성 예시](assets/examples/anima_lora.png)
+
 ## 사용 안내
 
 - [노트북 사용](docs/notebook_usage.md): 최초 실행, 설정 변경, 반복 생성

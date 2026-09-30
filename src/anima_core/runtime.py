@@ -8,6 +8,7 @@ from safetensors import safe_open
 from transformers import AutoTokenizer, T5TokenizerFast
 
 from .anima_dit import AnimaDiT
+from .lora import fuse_lora
 from .text_encoder import ZImageTextEncoder
 from .vae import WanVideoVAE
 
@@ -76,13 +77,17 @@ def load_text_encoder(path, device="cuda", dtype=torch.float16):
     )
 
 
-def load_dit(path, device="cuda", dtype=torch.float16):
+def load_dit(path, device="cuda", dtype=torch.float16, lora_path=None, lora_scale=1.0):
     model = AnimaDiT(device=device, dtype=dtype).eval().requires_grad_(False)
-    return _stream_load(
+    model = _stream_load(
         model,
         path,
         map_key=lambda key: key.removeprefix("net."),
     )
+    if lora_path:
+        count = fuse_lora(model, lora_path, scale=lora_scale)
+        print(f"LoRA 적용: {lora_path}, scale={lora_scale}, Linear {count}개")
+    return model
 
 
 def load_vae(path, device="cuda", dtype=torch.float16):

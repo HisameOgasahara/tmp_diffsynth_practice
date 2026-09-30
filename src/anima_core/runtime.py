@@ -26,7 +26,11 @@ WEIGHT_FILES = {
 
 
 def configure_diagnostics(config):
+    from .model_cache import clear_model_cache
+
     configure_logging(config.get("logging"))
+    if not config.get("use_model_cache", False):
+        clear_model_cache()
     configure_profiler(config.get("profiler"))
 
 

@@ -103,6 +103,10 @@ configure_diagnostics({
 
 `logging_utils.py`가 로그와 진행률 표시를, `profiling.py`가 profiler 설정·기록 구간·결과 저장을 담당합니다. `runtime.py`에는 단계 표시와 생성 스텝 경계만 연결되어 있습니다. profiler를 끄면 trace와 연산 요약을 생성하지 않습니다.
 
+## 선택적 모델 캐시
+
+3번 셀의 `USE_MODEL_CACHE`를 체크하면 Qwen·DiT·VAE를 CPU RAM에 보관하고, 단계별로 필요한 모델만 GPU로 옮겨 재사용합니다. 같은 모델·LoRA 설정으로 반복 생성할 때 파일 재로딩을 줄입니다. 기본값은 꺼짐이며, 켜면 CPU RAM 사용량이 늘고 CPU↔GPU 전송 비용은 남습니다. 동작과 초기화 방법은 [모델 캐시](docs/model_cache.md)를 참고하세요.
+
 ## 현재 범위
 
 목적은 먼저 **프레임워크 없이 Anima T2I 계산 그래프를 직접 만지는 최소 기준점**을 만드는 것입니다. 이후 ComfyUI에서 확인한 tokenizer/conditioning/numerics 차이나 새 논문 구현을 이 core에 직접 바꾸어 붙이는 방향을 전제로 합니다.

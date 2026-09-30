@@ -12,15 +12,6 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 실행 의존성 | PyTorch 등 일반 라이브러리, 모델 가중치 |
 | 모듈 구성 | 실행 환경과 독립적인 모델·생성·학습 로직 |
 
-## 학습 및 구현 목표
-
-| 영역 | 학습·구현 내용 |
-|---|---|
-| DiT | attention, 위치 임베딩, 시간·텍스트 조건 처리 |
-| FM | 데이터·노이즈 보간, 시간 샘플링, velocity 예측, 학습 손실 |
-| 생성 | 모델 예측으로 노이즈에서 이미지 생성 |
-| 학습 | 데이터 입력, 학습, 체크포인트 저장·불러오기 |
-
 ## 현재 구현 상태
 
 | 상태 | 기능 |
@@ -49,6 +40,4 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | DiffSynth-Studio | 교재 및 Anima 모델 구현 출처 · Apache-2.0 |
 | ComfyUI | Anima 이미지 생성 참고 |
 
-`src/anima_core/`의 `anima_dit.py`, `text_encoder.py`, `vae.py`는 `HisameOgasahara/DiffFlowDiT_test`에 포함된 DiffSynth-Studio 구현을 축약해 가져왔습니다.
-
-향후 참고: Diffusers, [anima_lora](https://github.com/sorryhyun/anima_lora). 필요한 코드는 출처와 라이선스를 유지해 가져올 수 있습니다.
+향후 참고: Diffusers, [anima_lora](https://github.com/sorryhyun/anima_lora).

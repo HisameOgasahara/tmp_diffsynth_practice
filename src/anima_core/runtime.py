@@ -13,6 +13,7 @@ from .logging_utils import configure_logging, log_stage, logger, track_progress
 from .profiling import configure_profiler, advance_profile_step, profile_range, profile_stage
 from .text_encoder import ZImageTextEncoder
 from .vae import WanVideoVAE
+from .prompt_weights import tokenize_weighted_prompt
 
 
 ANIMA_REPO = "circlestone-labs/Anima"
@@ -146,14 +147,26 @@ def encode_prompt(
     device="cuda",
     dtype=torch.float16,
     max_sequence_length=512,
+    use_token_weights=False,
+    return_token_weights=False,
 ):
-    qwen_inputs = qwen_tokenizer(
-        [prompt],
-        padding="max_length",
-        max_length=max_sequence_length,
-        truncation=True,
-        return_tensors="pt",
-    )
+    if use_token_weights:
+        qwen_inputs, t5_ids, t5_weights = tokenize_weighted_prompt(
+            qwen_tokenizer, t5_tokenizer, prompt, max_sequence_length
+        )
+    else:
+        qwen_inputs = qwen_tokenizer(
+            [prompt],
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        t5_inputs = t5_tokenizer(
+            [prompt], max_length=max_sequence_length, truncation=True, return_tensors="pt"
+        )
+        t5_ids = t5_inputs.input_ids
+        t5_weights = torch.ones((*t5_ids.shape, 1), dtype=torch.float32)
     input_ids = qwen_inputs.input_ids.to(device)
     attention_mask = qwen_inputs.attention_mask.to(device).bool()
     with profile_range("text/qwen_forward"):
@@ -163,22 +176,18 @@ def encode_prompt(
             output_hidden_states=True,
         ).hidden_states[-1].to(dtype)
 
-    t5_inputs = t5_tokenizer(
-        [prompt],
-        max_length=max_sequence_length,
-        truncation=True,
-        return_tensors="pt",
-    )
-    t5_ids = t5_inputs.input_ids.to(device)
+    t5_ids = t5_ids.to(device)
+    if return_token_weights:
+        return prompt_embeds, t5_ids, t5_weights.to(device=device, dtype=dtype)
     return prompt_embeds, t5_ids
 
 
 @torch.inference_mode()
 @log_stage("Anima text adapter conditioning")
 @profile_stage("adapt_conditioning")
-def adapt_conditioning(dit, prompt_embeds, t5_ids):
+def adapt_conditioning(dit, prompt_embeds, t5_ids, t5_weights=None):
     with profile_range("text/anima_adapter"):
-        return dit.preprocess_text_embeds(prompt_embeds, t5_ids)
+        return dit.preprocess_text_embeds(prompt_embeds, t5_ids, t5xxl_weights=t5_weights)
 
 
 def z_image_schedule(steps, denoise=1.0, shift=3.0):

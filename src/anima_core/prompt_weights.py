@@ -62,11 +62,13 @@ def _tokenize_segments(tokenizer, segments, max_length):
         tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
         ids.extend(tokens)
         weights.extend([weight] * len(tokens))
-    capacity = max_length - tokenizer.num_special_tokens_to_add(pair=False)
+    # Anima의 Qwen은 추가 토큰이 없고 T5는 EOS를 뒤에 붙입니다.
+    # 공개 호출 API로 suffix를 얻어 tokenizer 버전별 내부 메서드 차이를 피합니다.
+    suffix = tokenizer("", add_special_tokens=True)["input_ids"]
+    capacity = max_length - len(suffix)
     ids, weights = ids[:capacity], weights[:capacity]
-    ids = tokenizer.build_inputs_with_special_tokens(ids)
-    # Anima의 Qwen/T5 tokenizer는 시작 토큰이 없고 T5만 EOS를 뒤에 붙입니다.
-    weights.extend([1.0] * (len(ids) - len(weights)))
+    ids.extend(suffix)
+    weights.extend([1.0] * len(suffix))
     return ids, weights
 
 

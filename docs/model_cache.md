@@ -6,7 +6,7 @@
 
 ## 실행 흐름
 
-DiffSynth의 단계별 onload/offload 방식을 참고한 최소 구현이며, DiffSynth를 설치하지 않습니다. `src/anima_core/model_cache.py`가 모델 보관과 장치 이동을 담당합니다.
+DiffSynth의 단계별 onload/offload 방식을 참고했습니다. `src/anima_core/model_cache.py`가 모델 보관과 장치 이동을 담당합니다.
 
 | 셀 | 실행할 모델 | 단계 종료 후 |
 |---|---|---|
@@ -20,7 +20,7 @@ DiffSynth의 단계별 onload/offload 방식을 참고한 최소 구현이며, D
 
 모델 종류별로 하나씩 보관합니다. 재사용 조건은 가중치의 실제 경로·파일 크기·수정 시간과 dtype이며, DiT에는 LoRA 파일 정보와 강도도 포함합니다. 조건이 달라지면 해당 모델만 새로 준비합니다. LoRA를 바꾸거나 끄면 기본 가중치부터 다시 준비하므로 이전 LoRA 합산이 누적되지 않습니다.
 
-prompt, seed, steps, CFG, 이미지 크기는 모델 캐시를 교체하지 않습니다. prompt를 바꾸면 5번부터, 생성 설정만 바꾸면 6번부터 다시 실행합니다. 3번 셀을 다시 실행했을 때 LoRA를 계속 쓰려면 4-1번 셀도 다시 실행합니다.
+prompt, seed, steps, CFG, 이미지 크기는 모델 캐시를 교체하지 않습니다. 설정 변경 후 실행 순서는 [노트북 사용](notebook_usage.md#반복-생성)을 참고하세요.
 
 ## 비용과 초기화
 
@@ -31,4 +31,4 @@ from anima_core.model_cache import clear_model_cache
 clear_model_cache()
 ```
 
-로그의 `cache hit`/`cache miss`와 장치 이동 메시지로 재사용 여부를 확인할 수 있습니다. 프로파일러의 `PROFILE_STAGES`에 `cache_transfer`를 추가하면 CPU↔GPU 이동을 기록합니다. `load_dit` 등 로딩 단계는 캐시 miss가 발생했을 때만 기록됩니다.
+재사용 여부와 이동 비용 확인은 [캐시 사용 시 진단](diagnostics.md#캐시-사용-시-진단)을 참고하세요.

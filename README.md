@@ -8,9 +8,9 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|
 | 교재 | `reference`의 DiffSynth-Studio |
 | 구현 방식 | 기존 코어 로직 활용, 프레임워크 주변 구조 제거 |
-| 독립성 | DiffSynth·Diffusers·ComfyUI 설치 및 외부 리포 코드 의존성 제거 |
+| 코드 구성 | 필요한 구현을 이 리포에 포함하여 DiffSynth·Diffusers·ComfyUI 설치 없이 생성·학습 실행 |
 | 실행 의존성 | PyTorch 등 일반 라이브러리, 모델 가중치 |
-| 모듈 구성 | 실행 환경과 독립적인 모델·생성·학습 로직 |
+| 실행 환경 | 모델·생성·학습 모듈을 Colab 전용 코드와 분리 |
 
 ## 현재 구현 상태
 

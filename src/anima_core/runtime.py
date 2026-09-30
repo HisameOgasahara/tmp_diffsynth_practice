@@ -9,6 +9,8 @@ from transformers import AutoTokenizer, T5TokenizerFast
 
 from .anima_dit import AnimaDiT
 from .lora import fuse_lora
+from .logging_utils import configure_logging, log_stage, logger, track_progress
+from .profiling import configure_profiler, advance_profile_step, profile_range, profile_stage
 from .text_encoder import ZImageTextEncoder
 from .vae import WanVideoVAE
 
@@ -23,9 +25,16 @@ WEIGHT_FILES = {
 }
 
 
+def configure_diagnostics(config):
+    configure_logging(config.get("logging"))
+    configure_profiler(config.get("profiler"))
+
+
+@log_stage("모델 가중치 다운로드/캐시 확인")
 def download_weights(cache_dir=None):
     paths = {}
     for name, filename in WEIGHT_FILES.items():
+        logger.info("%s 가중치 확인: %s", name, filename)
         paths[name] = Path(
             hf_hub_download(
                 repo_id=ANIMA_REPO,
@@ -34,6 +43,7 @@ def download_weights(cache_dir=None):
                 cache_dir=cache_dir,
             )
         )
+        logger.info("%s 가중치 준비 완료", name)
     return paths
 
 
@@ -44,7 +54,7 @@ def _stream_load(model, path, map_key, skip_key=lambda key: False):
     unexpected = []
 
     with safe_open(str(path), framework="pt", device="cpu") as checkpoint:
-        for source_key in checkpoint.keys():
+        for source_key in track_progress(checkpoint.keys(), f"{model.__class__.__name__} 가중치"):
             if skip_key(source_key):
                 continue
             target_key = map_key(source_key)
@@ -52,8 +62,9 @@ def _stream_load(model, path, map_key, skip_key=lambda key: False):
             if target is None:
                 unexpected.append((source_key, target_key))
                 continue
-            tensor = checkpoint.get_tensor(source_key)
-            target.data.copy_(tensor.to(device=target.device, dtype=target.dtype))
+            with profile_range("weights/read_and_copy"):
+                tensor = checkpoint.get_tensor(source_key)
+                target.data.copy_(tensor.to(device=target.device, dtype=target.dtype))
             loaded.add(target_key)
 
     required = set(model.state_dict().keys())
@@ -65,10 +76,13 @@ def _stream_load(model, path, map_key, skip_key=lambda key: False):
     return model
 
 
+@log_stage("Qwen text encoder 로딩")
+@profile_stage("load_text_encoder")
 def load_text_encoder(path, device="cuda", dtype=torch.float16):
-    with torch.device(device):
+    logger.info("device=%s, dtype=%s", device, dtype)
+    with profile_range("model/initialize"), torch.device(device):
         model = ZImageTextEncoder(model_size="0.6B")
-    model = model.to(dtype=dtype).eval().requires_grad_(False)
+        model = model.to(dtype=dtype).eval().requires_grad_(False)
     return _stream_load(
         model,
         path,
@@ -77,23 +91,32 @@ def load_text_encoder(path, device="cuda", dtype=torch.float16):
     )
 
 
+@log_stage("Anima DiT 로딩")
+@profile_stage("load_dit")
 def load_dit(path, device="cuda", dtype=torch.float16, lora_path=None, lora_scale=1.0):
-    model = AnimaDiT(device=device, dtype=dtype).eval().requires_grad_(False)
+    logger.info("device=%s, dtype=%s", device, dtype)
+    with profile_range("model/initialize"):
+        model = AnimaDiT(device=device, dtype=dtype).eval().requires_grad_(False)
     model = _stream_load(
         model,
         path,
         map_key=lambda key: key.removeprefix("net."),
     )
     if lora_path:
-        count = fuse_lora(model, lora_path, scale=lora_scale)
-        print(f"LoRA 적용: {lora_path}, scale={lora_scale}, Linear {count}개")
+        logger.info("LoRA 적용 시작: %s, scale=%s", lora_path, lora_scale)
+        with profile_range("model/lora_fusion"):
+            count = fuse_lora(model, lora_path, scale=lora_scale)
+        logger.info("LoRA 적용 완료: Linear %d개", count)
     return model
 
 
+@log_stage("VAE 로딩")
+@profile_stage("load_vae")
 def load_vae(path, device="cuda", dtype=torch.float16):
-    with torch.device(device):
+    logger.info("device=%s, dtype=%s", device, dtype)
+    with profile_range("model/initialize"), torch.device(device):
         model = WanVideoVAE()
-    model = model.to(dtype=dtype).eval().requires_grad_(False)
+        model = model.to(dtype=dtype).eval().requires_grad_(False)
     return _stream_load(
         model,
         path,
@@ -101,6 +124,7 @@ def load_vae(path, device="cuda", dtype=torch.float16):
     )
 
 
+@log_stage("Qwen/T5 tokenizer 로딩")
 def load_tokenizers():
     qwen = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     t5 = T5TokenizerFast.from_pretrained("google/t5-v1_1-xxl")
@@ -108,6 +132,8 @@ def load_tokenizers():
 
 
 @torch.inference_mode()
+@log_stage("Qwen prompt encoding")
+@profile_stage("encode_prompt")
 def encode_prompt(
     text_encoder,
     qwen_tokenizer,
@@ -126,11 +152,12 @@ def encode_prompt(
     )
     input_ids = qwen_inputs.input_ids.to(device)
     attention_mask = qwen_inputs.attention_mask.to(device).bool()
-    prompt_embeds = text_encoder(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        output_hidden_states=True,
-    ).hidden_states[-1].to(dtype)
+    with profile_range("text/qwen_forward"):
+        prompt_embeds = text_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        ).hidden_states[-1].to(dtype)
 
     t5_inputs = t5_tokenizer(
         [prompt],
@@ -143,8 +170,11 @@ def encode_prompt(
 
 
 @torch.inference_mode()
+@log_stage("Anima text adapter conditioning")
+@profile_stage("adapt_conditioning")
 def adapt_conditioning(dit, prompt_embeds, t5_ids):
-    return dit.preprocess_text_embeds(prompt_embeds, t5_ids)
+    with profile_range("text/anima_adapter"):
+        return dit.preprocess_text_embeds(prompt_embeds, t5_ids)
 
 
 def z_image_schedule(steps, denoise=1.0, shift=3.0):
@@ -155,6 +185,8 @@ def z_image_schedule(steps, denoise=1.0, shift=3.0):
 
 
 @torch.inference_mode()
+@log_stage("Euler 이미지 생성")
+@profile_stage("sample_euler", stepped=True)
 def sample_euler(
     dit,
     positive,
@@ -169,6 +201,7 @@ def sample_euler(
     device="cuda",
     dtype=torch.float16,
 ):
+    logger.info("생성 설정: %sx%s, steps=%s, CFG=%s, seed=%s", width, height, steps, cfg_scale, seed)
     generator = torch.Generator("cpu").manual_seed(int(seed))
     latents = torch.randn(
         (1, 16, int(height) // 8, int(width) // 8),
@@ -179,26 +212,29 @@ def sample_euler(
 
     sigmas, timesteps = z_image_schedule(steps, denoise=denoise, shift=shift)
 
-    for i, timestep in enumerate(timesteps):
+    for i, timestep in enumerate(track_progress(timesteps, "Euler 생성", total=len(timesteps))):
         t = timestep.reshape(1).to(device=device, dtype=dtype) / 1000.0
 
-        positive_pred = dit(
-            x=latents.unsqueeze(2),
-            timesteps=t,
-            context=positive,
-            t5xxl_ids=None,
-        ).squeeze(2)
+        with profile_range("sampling/positive_dit"):
+            positive_pred = dit(
+                x=latents.unsqueeze(2),
+                timesteps=t,
+                context=positive,
+                t5xxl_ids=None,
+            ).squeeze(2)
 
         if float(cfg_scale) == 1.0:
             velocity = positive_pred
         else:
-            negative_pred = dit(
-                x=latents.unsqueeze(2),
-                timesteps=t,
-                context=negative,
-                t5xxl_ids=None,
-            ).squeeze(2)
-            velocity = negative_pred + float(cfg_scale) * (positive_pred - negative_pred)
+            with profile_range("sampling/negative_dit"):
+                negative_pred = dit(
+                    x=latents.unsqueeze(2),
+                    timesteps=t,
+                    context=negative,
+                    t5xxl_ids=None,
+                ).squeeze(2)
+            with profile_range("sampling/cfg"):
+                velocity = negative_pred + float(cfg_scale) * (positive_pred - negative_pred)
 
         sigma = sigmas[i].to(device=device, dtype=latents.dtype)
         sigma_next = (
@@ -206,14 +242,20 @@ def sample_euler(
             if i + 1 < len(sigmas)
             else torch.zeros((), device=device, dtype=latents.dtype)
         )
-        latents = latents + velocity * (sigma_next - sigma)
+        with profile_range("sampling/euler_update"):
+            latents = latents + velocity * (sigma_next - sigma)
+        logger.debug("생성 스텝 %d/%d 완료", i + 1, len(timesteps))
+        advance_profile_step()
 
     return latents
 
 
 @torch.inference_mode()
+@log_stage("VAE 이미지 디코딩")
+@profile_stage("decode_image")
 def decode_image(vae, latents, device="cuda"):
-    decoded = vae.decode(latents.unsqueeze(2), device=device).squeeze(2)
+    with profile_range("vae/decode"):
+        decoded = vae.decode(latents.unsqueeze(2), device=device).squeeze(2)
     pixels = ((decoded.float() + 1.0) / 2.0).clamp(0, 1)
     array = (
         pixels[0]

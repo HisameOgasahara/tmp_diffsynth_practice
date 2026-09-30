@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from einops import rearrange
 
 
@@ -32,5 +33,9 @@ def gradient_checkpoint_forward(
     use_gradient_checkpointing_offload=False,
     **kwargs,
 ):
-    # This minimal repository is inference-only.
+    if use_gradient_checkpointing and torch.is_grad_enabled():
+        if use_gradient_checkpointing_offload:
+            with torch.autograd.graph.save_on_cpu(pin_memory=True):
+                return checkpoint(model, use_reentrant=False, **kwargs)
+        return checkpoint(model, use_reentrant=False, **kwargs)
     return model(**kwargs)

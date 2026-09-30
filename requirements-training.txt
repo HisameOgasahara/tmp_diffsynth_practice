@@ -1,0 +1,10 @@
+# Colab의 기존 CUDA PyTorch를 유지합니다. torch >= 2.4가 필요합니다.
+safetensors>=0.5
+einops>=0.8
+transformers>=4.51,<6
+huggingface_hub>=0.30
+sentencepiece>=0.2
+Pillow>=10
+numpy>=1.26
+tqdm>=4.66
+tensorboard>=2.18

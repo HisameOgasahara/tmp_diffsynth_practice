@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -22,7 +23,7 @@ from anima_core.training.config import load_config, write_config
 from anima_core.training.dataset import CachedDataset, discover_pairs, prepare_cache, read_image
 from anima_core.training.flow_matching import FlowMatchingLoss
 from anima_core.training.lora import collect_lora_weights, find_target_modules, inject_lora
-from anima_core.training.trainer import train_model
+from anima_core.training.trainer import create_scheduler, train_model
 
 
 class TinyBlock(nn.Module):
@@ -39,8 +40,9 @@ class TinyDiT(nn.Module):
         super().__init__()
         self.blocks = nn.ModuleList([TinyBlock(), TinyBlock()])
 
-    def forward(self, x, timesteps, context, t5xxl_ids=None, use_gradient_checkpointing=False):
-        value = x.movedim(1, -1) + context.mean() + timesteps.reshape(-1, 1, 1, 1, 1)
+    def forward(self, x, timesteps, context, t5xxl_ids=None, use_gradient_checkpointing=False,
+                target_attention_mask=None, source_attention_mask=None):
+        value = x.movedim(1, -1) + context.mean(dim=(1, 2)).reshape(-1, 1, 1, 1, 1) + timesteps.reshape(-1, 1, 1, 1, 1)
         for block in self.blocks:
             value = gradient_checkpoint_forward(block, use_gradient_checkpointing, x=value)
         return value.movedim(-1, 1)
@@ -63,10 +65,14 @@ def make_dataset(path):
     for index in range(3):
         filename = f"{index}.safetensors"
         save_file({"latent": torch.randn(4, 1, 2, 2, generator=generator),
-                   "prompt_embeds": torch.randn(5, 4, generator=generator),
-                   "t5_ids": torch.arange(index + 2)}, str(path / filename))
+                   "prompt_embeds": torch.randn(512, 4, generator=generator),
+                   "t5_ids": torch.arange(512),
+                   "qwen_mask": torch.arange(512) < index + 2,
+                   "t5_mask": torch.arange(512) < index + 2}, str(path / filename))
         records.append({"file": filename})
-    save_file({"prompt_embeds": torch.zeros(5, 4), "t5_ids": torch.zeros(1, dtype=torch.long)},
+    save_file({"prompt_embeds": torch.zeros(512, 4), "t5_ids": torch.zeros(512, dtype=torch.long),
+               "qwen_mask": torch.arange(512) < 1,
+               "t5_mask": torch.arange(512) < 1},
               str(path / "empty.safetensors"))
     (path / "manifest.json").write_text(json.dumps({"fingerprint": "tiny-fixture", "records": records}), encoding="utf-8")
     return CachedDataset(path)
@@ -127,15 +133,247 @@ class TrainingTests(unittest.TestCase):
         with torch.no_grad():
             torch.testing.assert_close(model(latent, torch.ones(1), prompt), frozen(latent, torch.ones(1), prompt))
 
-    def test_flow_schedule_matches_reference(self):
-        loss = FlowMatchingLoss()
-        sigma = torch.linspace(1.0, 0.0, 1001)[:-1]
-        sigma = 3 * sigma / (1 + 2 * sigma)
-        weights = torch.exp(-2 * ((sigma * 1000 - 500) / 1000) ** 2)
-        weights -= weights.min()
-        weights *= 1000 / weights.sum()
-        torch.testing.assert_close(loss.sigmas, sigma)
-        torch.testing.assert_close(loss.weights, weights)
+    def test_sigmoid_timesteps_and_unweighted_loss_match_reference(self):
+        normals = torch.tensor([-2.0, 0.0, 2.0])
+        latent = torch.randn(3, 4, 1, 2, 2)
+        noise = torch.randn_like(latent)
+        prompt = torch.randn(3, 5, 4)
+        model = TinyDiT()
+        for training in (None, {"sigmoid_scale": 1.7, "sigmoid_bias": -0.3}):
+            scale = 1.0 if training is None else training["sigmoid_scale"]
+            bias = 0.0 if training is None else training["sigmoid_bias"]
+            sigma = torch.sigmoid(normals * scale + bias)
+            noisy = (1 - sigma.reshape(-1, 1, 1, 1, 1)) * latent + sigma.reshape(-1, 1, 1, 1, 1) * noise
+            prediction = model(noisy, sigma, prompt)
+            expected = torch.nn.functional.mse_loss(prediction.float(), (noise - latent).float())
+            with patch("torch.randn", return_value=normals), patch("torch.randn_like", return_value=noise), \
+                 patch.object(model, "forward", wraps=model.forward) as forward:
+                actual = FlowMatchingLoss(training)(model, latent, prompt, None)
+            torch.testing.assert_close(actual, expected)
+            torch.testing.assert_close(forward.call_args.kwargs["timesteps"], sigma)
+            torch.testing.assert_close(forward.call_args.kwargs["x"], noisy)
+
+    def test_cosine_scheduler_matches_transformers_warmup(self):
+        from transformers import get_cosine_schedule_with_warmup
+
+        for total, ratio in ((11, 0.24), (8, 0.0), (8, 0.25)):
+            config = make_config()["training"]
+            config.update(max_steps=total, warmup_ratio=ratio, lr_scheduler="cosine")
+            optimizer = torch.optim.AdamW([nn.Parameter(torch.ones(1))], lr=0.01)
+            reference_optimizer = torch.optim.AdamW([nn.Parameter(torch.ones(1))], lr=0.01)
+            scheduler = create_scheduler(optimizer, config)
+            reference = get_cosine_schedule_with_warmup(reference_optimizer,
+                                                       num_warmup_steps=int(total * ratio),
+                                                       num_training_steps=total)
+            for _ in range(total + 1):
+                self.assertAlmostEqual(scheduler.get_last_lr()[0], reference.get_last_lr()[0], places=14)
+                optimizer.step()
+                reference_optimizer.step()
+                scheduler.step()
+                reference.step()
+
+    def test_constant_scheduler_keeps_lr_and_rejects_positive_warmup(self):
+        config = make_config()["training"]
+        config.update(max_steps=8, warmup_ratio=0.0, lr_scheduler="constant")
+        optimizer = torch.optim.AdamW([nn.Parameter(torch.ones(1))], lr=0.01)
+        scheduler = create_scheduler(optimizer, config)
+        for _ in range(config["max_steps"] + 1):
+            self.assertEqual(scheduler.get_last_lr()[0], 0.01)
+            optimizer.step()
+            scheduler.step()
+        config["warmup_ratio"] = 0.25
+        with self.assertRaises(ValueError):
+            create_scheduler(optimizer, config)
+
+    def test_trainer_loss_average_replaces_first_step_at_epoch_boundary(self):
+        config = make_config()
+        config["dataset"].update(batch_size=2, repeat=4, caption_dropout_rate=0)
+        config["training"].update(max_steps=4, gradient_accumulation_steps=2)
+        model = TinyDiT()
+        inject_lora(model, config["lora"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            train_model(model, config, make_dataset(root / "cache"), root / "output",
+                        device="cpu", tensorboard=False)
+            metrics = [json.loads(line) for line in (root / "output/metrics.jsonl").read_text().splitlines()]
+        self.assertEqual(len(metrics), 4)
+        self.assertAlmostEqual(metrics[2]["avr_loss"], sum(entry["loss"] for entry in metrics[:3]) / 3)
+        self.assertAlmostEqual(metrics[3]["avr_loss"],
+                               (metrics[3]["loss"] + metrics[1]["loss"] + metrics[2]["loss"]) / 3)
+
+    def test_loss_recorder_replaces_epoch_steps_and_restores_average(self):
+        from anima_core.training.loss_recorder import LossRecorder
+
+        recorder = LossRecorder()
+        self.assertEqual(recorder.moving_average, 0)
+        recorder.add(epoch=0, step=0, loss=2.0)
+        recorder.add(epoch=0, step=1, loss=4.0)
+        self.assertEqual(recorder.moving_average, 3.0)
+        recorder.add(epoch=1, step=0, loss=6.0)
+        self.assertEqual(recorder.moving_average, 5.0)
+        restored = LossRecorder()
+        restored.load_state_dict(recorder.state_dict())
+        self.assertEqual(restored.moving_average, 5.0)
+        for current in (recorder, restored):
+            current.add(epoch=1, step=1, loss=8.0)
+        self.assertEqual(restored.moving_average, 7.0)
+        self.assertEqual(restored.state_dict(), recorder.state_dict())
+
+    def test_batched_loss_and_gradients_match_serial_samples(self):
+        batch_model = TinyDiT()
+        serial_model = deepcopy(batch_model)
+        latent = torch.randn(3, 4, 1, 2, 2)
+        prompt = torch.randn(3, 5, 4)
+        ids = torch.arange(5).expand(3, -1)
+        qwen_mask = torch.arange(5).unsqueeze(0) < torch.tensor([2, 4, 5]).unsqueeze(1)
+        t5_mask = qwen_mask.clone()
+        normals = torch.tensor([-1.5, -0.2, 1.5])
+        noise = torch.randn_like(latent)
+        loss_fn = FlowMatchingLoss()
+        with patch("torch.randn", return_value=normals), patch("torch.randn_like", return_value=noise):
+            batched_loss = loss_fn(batch_model, latent, prompt, ids,
+                                   target_attention_mask=t5_mask, source_attention_mask=qwen_mask)
+        batched_loss.backward()
+        serial_loss = 0
+        for index in range(3):
+            sample = slice(index, index + 1)
+            with patch("torch.randn", return_value=normals[sample]), \
+                 patch("torch.randn_like", return_value=noise[sample]):
+                serial_loss = serial_loss + loss_fn(serial_model, latent[sample], prompt[sample], ids[sample],
+                                                   target_attention_mask=t5_mask[sample],
+                                                   source_attention_mask=qwen_mask[sample]) / 3
+        serial_loss.backward()
+        torch.testing.assert_close(batched_loss, serial_loss)
+        for batched, serial in zip(batch_model.parameters(), serial_model.parameters()):
+            torch.testing.assert_close(batched.grad, serial.grad)
+
+    def test_anima_adapter_masks_padding_and_ignores_source_padding(self):
+        from anima_core.anima_dit import AnimaDiT, LLMAdapter
+
+        model = AnimaDiT.__new__(AnimaDiT)
+        nn.Module.__init__(model)
+        model.llm_adapter = LLMAdapter(source_dim=16, target_dim=16, model_dim=16,
+                                       num_layers=1, num_heads=2, operations=nn, dtype=torch.float32)
+        context = torch.randn(2, 5, 16)
+        ids = torch.arange(5).expand(2, -1)
+        source_mask = torch.arange(5).unsqueeze(0) < torch.tensor([2, 4]).unsqueeze(1)
+        target_mask = torch.arange(5).unsqueeze(0) < torch.tensor([3, 5]).unsqueeze(1)
+        padded_context = context.masked_fill(~source_mask.unsqueeze(-1), 1000)
+        with torch.no_grad():
+            expected = model.preprocess_text_embeds(context, ids, target_attention_mask=target_mask,
+                                                    source_attention_mask=source_mask)
+            actual = model.preprocess_text_embeds(padded_context, ids, target_attention_mask=target_mask,
+                                                  source_attention_mask=source_mask)
+        torch.testing.assert_close(actual, expected)
+        self.assertEqual(actual.shape, (2, 512, 16))
+        self.assertTrue(torch.all(actual[0, 3:] == 0))
+        self.assertTrue(torch.all(actual[1, 5:] == 0))
+
+    def test_encode_prompt_training_masks_and_inference_return(self):
+        from anima_core.runtime import encode_prompt
+
+        class FakeTokenizer:
+            def __init__(self, token_count):
+                self.token_count = token_count
+                self.calls = []
+
+            def __call__(self, prompts, **kwargs):
+                self.calls.append((prompts, kwargs))
+                length = kwargs["max_length"] if kwargs.get("padding") == "max_length" else self.token_count
+                return SimpleNamespace(input_ids=torch.arange(length).unsqueeze(0),
+                                       attention_mask=(torch.arange(length) < self.token_count).unsqueeze(0).long())
+
+        class FakeTextEncoder:
+            def __call__(self, input_ids, attention_mask, output_hidden_states):
+                self.attention_mask = attention_mask
+                return SimpleNamespace(hidden_states=[torch.ones(*input_ids.shape, 4)])
+
+        qwen, t5, encoder = FakeTokenizer(3), FakeTokenizer(2), FakeTextEncoder()
+        result = encode_prompt(encoder, qwen, t5, "caption", device="cpu", dtype=torch.float32,
+                               return_attention_masks=True)
+        self.assertEqual(len(result), 4)
+        embeds, ids, qwen_mask, t5_mask = result
+        self.assertEqual(embeds.shape, (1, 512, 4))
+        self.assertEqual(ids.shape, (1, 512))
+        self.assertEqual(qwen_mask.shape, (1, 512))
+        self.assertEqual(t5_mask.shape, (1, 512))
+        self.assertEqual(qwen_mask.dtype, torch.bool)
+        self.assertEqual(t5_mask.dtype, torch.bool)
+        self.assertEqual(qwen_mask.sum(), 3)
+        self.assertEqual(t5_mask.sum(), 2)
+        self.assertTrue(torch.all(embeds[:, :3] == 1))
+        self.assertTrue(torch.all(embeds[:, 3:] == 0))
+        self.assertEqual(encoder.attention_mask.dtype, torch.bool)
+        for tokenizer in (qwen, t5):
+            self.assertEqual(tokenizer.calls[0][1]["padding"], "max_length")
+            self.assertEqual(tokenizer.calls[0][1]["max_length"], 512)
+            self.assertTrue(tokenizer.calls[0][1]["truncation"])
+        inference = encode_prompt(encoder, qwen, t5, "caption", device="cpu", dtype=torch.float32)
+        self.assertEqual(len(inference), 2)
+        self.assertEqual(inference[0].shape, (1, 512, 4))
+        self.assertEqual(inference[1].shape, (1, 2))
+        self.assertTrue(torch.all(inference[0] == 1))
+        self.assertNotIn("padding", t5.calls[1][1])
+
+    def test_trainer_calls_model_once_per_full_batch(self):
+        config = make_config()
+        config["training"]["max_steps"] = 2
+        config["dataset"]["caption_dropout_rate"] = 0
+        model = TinyDiT()
+        inject_lora(model, config["lora"])
+        batch_shapes = []
+
+        def record_batch(module, args, kwargs):
+            batch_shapes.append((kwargs["x"].shape[0], kwargs["context"].shape[0],
+                                 kwargs["source_attention_mask"].shape, kwargs["target_attention_mask"].shape))
+
+        hook = model.register_forward_pre_hook(record_batch, with_kwargs=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            train_model(model, config, make_dataset(root / "cache"), root / "output",
+                        device="cpu", tensorboard=False)
+        hook.remove()
+        self.assertEqual(batch_shapes, [(2, 2, torch.Size([2, 512]), torch.Size([2, 512]))] * 4)
+
+    def test_trainer_clips_once_after_accumulation_before_optimizer_step(self):
+        config = make_config()
+        config["training"].update(max_steps=2, max_grad_norm=1.0)
+        config["dataset"]["caption_dropout_rate"] = 0
+        model = TinyDiT()
+        inject_lora(model, config["lora"])
+        events = []
+        original_unscale = torch.amp.GradScaler.unscale_
+        original_step = torch.amp.GradScaler.step
+        original_clip = torch.nn.utils.clip_grad_norm_
+
+        def unscale(scaler, optimizer):
+            events.append("unscale")
+            return original_unscale(scaler, optimizer)
+
+        def clip(parameters, max_norm, *args, **kwargs):
+            events.append("clip")
+            parameters = list(parameters)
+            self.assertEqual(max_norm, 1.0)
+            self.assertTrue(all(parameter.grad is not None for parameter in parameters))
+            norm = original_clip(parameters, max_norm, *args, **kwargs)
+            clipped_norm = torch.stack([parameter.grad.norm() for parameter in parameters]).norm()
+            self.assertLessEqual(float(clipped_norm), max_norm + 1e-6)
+            return norm
+
+        def step(scaler, optimizer, *args, **kwargs):
+            events.append("step")
+            return original_step(scaler, optimizer, *args, **kwargs)
+
+        hook = model.register_forward_pre_hook(lambda *args: events.append("forward"))
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(torch.amp.GradScaler, "unscale_", unscale), \
+             patch.object(torch.amp.GradScaler, "step", step), \
+             patch("torch.nn.utils.clip_grad_norm_", side_effect=clip):
+            root = Path(temporary)
+            train_model(model, config, make_dataset(root / "cache"), root / "output",
+                        device="cpu", tensorboard=False)
+        hook.remove()
+        self.assertEqual(events, ["forward", "forward", "unscale", "clip", "step"] * 2)
 
     def test_existing_dit_blocks_backpropagate_with_checkpoint(self):
         from anima_core.anima_dit import MiniTrainDIT
@@ -149,7 +387,7 @@ class TrainingTests(unittest.TestCase):
         config = make_config()["lora"]
         config["target_modules"] = "self_attn.q_proj"
         inject_lora(model, config)
-        loss = FlowMatchingLoss()(model, torch.randn(1, 4, 1, 4, 4), torch.randn(1, 5, 16), None, True)
+        loss = FlowMatchingLoss()(model, torch.randn(2, 4, 1, 4, 4), torch.randn(2, 5, 16), None, True)
         loss.backward()
         self.assertTrue(torch.isfinite(loss))
         self.assertTrue(all(parameter.grad is not None for parameter in model.parameters() if parameter.requires_grad))
@@ -174,10 +412,15 @@ class TrainingTests(unittest.TestCase):
             with patch("anima_core.runtime.load_vae", return_value=FakeVAE()) as vae_loader, \
                  patch("anima_core.runtime.load_text_encoder"), \
                  patch("anima_core.runtime.load_tokenizers", return_value=(None, None)), \
-                 patch("anima_core.runtime.encode_prompt", return_value=(torch.zeros(1, 5, 4), torch.ones(1, 2, dtype=torch.long))):
+                 patch("anima_core.runtime.encode_prompt", return_value=(
+                     torch.zeros(1, 512, 4), torch.ones(1, 512, dtype=torch.long),
+                     torch.arange(512).unsqueeze(0) < 3, torch.arange(512).unsqueeze(0) < 2)):
                 cache = prepare_cache(config, data, root / "cache", weights, "cpu")
                 dataset = CachedDataset(cache)
                 self.assertEqual(dataset[0]["latent"].shape, (16, 1, 4, 4))
+                self.assertEqual(dataset[0]["t5_ids"].shape, (512,))
+                self.assertEqual(dataset[0]["qwen_mask"].sum(), 3)
+                self.assertEqual(dataset[0]["t5_mask"].sum(), 2)
                 self.assertEqual(prepare_cache(config, data, root / "cache", weights, "cpu"), cache)
                 self.assertEqual(vae_loader.call_count, 1)
 
@@ -202,6 +445,14 @@ class TrainingTests(unittest.TestCase):
             expected_metrics = [json.loads(line) for line in (root / "full/metrics.jsonl").read_text().splitlines()]
             actual_metrics = [json.loads(line) for line in (root / "resume/metrics.jsonl").read_text().splitlines()]
             self.assertEqual([entry["loss"] for entry in expected_metrics[2:]], [entry["loss"] for entry in actual_metrics])
+            self.assertEqual([entry["avr_loss"] for entry in expected_metrics[2:]],
+                             [entry["avr_loss"] for entry in actual_metrics])
+            checkpoint_state = torch.load(root / "full/step-0000002/state.pt", weights_only=True)
+            self.assertIn("loss_recorder", checkpoint_state)
+            from anima_core.training.loss_recorder import LossRecorder
+            saved_recorder = LossRecorder()
+            saved_recorder.load_state_dict(checkpoint_state["loss_recorder"])
+            self.assertEqual(saved_recorder.moving_average, expected_metrics[1]["avr_loss"])
             self.assertTrue(list((root / "full/logs").glob("events.out.tfevents.*")))
             incompatible = deepcopy(config)
             incompatible["lora"]["alpha"] = 4

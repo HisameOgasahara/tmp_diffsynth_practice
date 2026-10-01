@@ -6,8 +6,6 @@
 
 ## 실행 흐름
 
-DiffSynth의 단계별 onload/offload 방식을 참고했습니다. `src/anima_core/model_cache.py`가 모델 보관과 장치 이동을 담당합니다.
-
 | 셀 | 실행할 모델 | 단계 종료 후 |
 |---|---|---|
 | 5번 | Qwen text encoder를 GPU로 이동 | CPU RAM에 보관 |

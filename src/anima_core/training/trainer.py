@@ -13,17 +13,20 @@ from .config import resolve_dtype, validate_config, write_config
 from .dataset import CachedDataset, SampleStream, release_cuda_memory
 from .flow_matching import FlowMatchingLoss
 from .lora import inject_lora
+from .loss_recorder import LossRecorder
 
 
 def create_scheduler(optimizer, training):
     total = training["max_steps"]
-    warmup = round(total * training["warmup_ratio"])
+    warmup = int(total * training["warmup_ratio"])
+    if training["lr_scheduler"] == "constant" and warmup:
+        raise ValueError("constant 스케줄에서는 warmup_ratio를 0으로 설정하세요.")
 
     def multiplier(completed):
-        if warmup and completed < warmup:
-            return (completed + 1) / warmup
         if training["lr_scheduler"] == "constant":
             return 1.0
+        if warmup and completed < warmup:
+            return completed / warmup
         progress = min(1.0, max(0.0, (completed - warmup) / max(1, total - warmup)))
         return 0.5 * (1 + math.cos(math.pi * progress))
 
@@ -51,12 +54,14 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and dtype == torch.float16)
     step = 0
     stream_state = {"epoch": 0, "cursor": 0}
+    loss_recorder = LossRecorder()
     if resume_from:
         state = load_checkpoint(resume_from, model, optimizer, scheduler, scaler,
                                 config, fingerprint, device)
         step, stream_state = state["step"], state["stream"]
+        loss_recorder.load_state_dict(state["loss_recorder"])
     stream = SampleStream(dataset, config["dataset"]["repeat"], training["seed"], **stream_state)
-    loss_fn = FlowMatchingLoss()
+    loss_fn = FlowMatchingLoss(training)
     writer = None
     if tensorboard:
         from torch.utils.tensorboard import SummaryWriter
@@ -68,29 +73,40 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
     dropout = config["dataset"]["caption_dropout_rate"]
     print(f"학습 가능 파라미터: {sum(p.numel() for p in parameters):,}")
     print(f"batch={batch_size}, accumulation={accumulation}, 유효 batch={batch_size * accumulation}")
-    print("캡션 길이를 유지하기 위해 batch 안의 샘플을 순차 계산해 gradient를 평균합니다.")
+    print("캡션 조건을 고정 길이로 패딩하여 batch 전체를 함께 계산합니다.")
     progress = tqdm(total=training["max_steps"], initial=step, desc="LoRA optimizer 업데이트")
     try:
         while step < training["max_steps"]:
             started = time.monotonic()
+            loss_epoch = stream.epoch
+            loss_step = stream.cursor // (batch_size * accumulation)
+            if stream.cursor == len(stream.order):
+                loss_epoch += 1
+                loss_step = 0
             optimizer.zero_grad(set_to_none=True)
             total_loss = 0.0
             lr = optimizer.param_groups[0]["lr"]
             for _ in range(accumulation):
-                for sample in stream.take(batch_size):
-                    condition = dataset.empty if torch.rand(()).item() < dropout else sample
-                    latent = sample["latent"].unsqueeze(0).to(device=device, dtype=dtype)
-                    embeds = condition["prompt_embeds"].unsqueeze(0).to(device=device, dtype=dtype)
-                    ids = condition["t5_ids"].unsqueeze(0).to(device=device)
-                    with torch.autocast(device_type=device.type, dtype=dtype, enabled=dtype != torch.float32):
-                        loss = loss_fn(model, latent, embeds, ids,
-                                       config["runtime"]["use_gradient_checkpointing"])
-                    if not torch.isfinite(loss):
-                        raise RuntimeError("loss에 비유한 값이 있습니다. precision과 학습률을 확인하세요.")
-                    total_loss += float(loss.detach()) / (batch_size * accumulation)
-                    scaler.scale(loss / (batch_size * accumulation)).backward()
-                    del loss, latent, embeds, ids
+                samples = stream.take(batch_size)
+                conditions = [dataset.empty if torch.rand(()).item() < dropout else sample for sample in samples]
+                latent = torch.stack([sample["latent"] for sample in samples]).to(device=device, dtype=dtype)
+                embeds = torch.stack([condition["prompt_embeds"] for condition in conditions]).to(device=device, dtype=dtype)
+                ids = torch.stack([condition["t5_ids"] for condition in conditions]).to(device=device)
+                qwen_mask = torch.stack([condition["qwen_mask"] for condition in conditions]).to(device=device)
+                t5_mask = torch.stack([condition["t5_mask"] for condition in conditions]).to(device=device)
+                with torch.autocast(device_type=device.type, dtype=dtype, enabled=dtype != torch.float32):
+                    loss = loss_fn(model, latent, embeds, ids,
+                                   config["runtime"]["use_gradient_checkpointing"],
+                                   target_attention_mask=t5_mask, source_attention_mask=qwen_mask)
+                if not torch.isfinite(loss):
+                    raise RuntimeError("loss에 비유한 값이 있습니다. precision과 학습률을 확인하세요.")
+                total_loss += float(loss.detach()) / accumulation
+                scaler.scale(loss / accumulation).backward()
+                del loss, latent, embeds, ids, qwen_mask, t5_mask
             old_scale = scaler.get_scale()
+            if training["max_grad_norm"] != 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(parameters, training["max_grad_norm"])
             scaler.step(optimizer)
             scaler.update()
             if scaler.is_enabled() and scaler.get_scale() < old_scale:
@@ -98,19 +114,21 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
                 continue
             scheduler.step()
             step += 1
+            loss_recorder.add(epoch=loss_epoch, step=loss_step, loss=total_loss)
             metrics = {"step": step, "loss": total_loss, "learning_rate": lr,
+                       "avr_loss": loss_recorder.moving_average,
                        "seconds": time.monotonic() - started, "epoch": stream.epoch}
             log_file.write(json.dumps(metrics) + "\n")
             log_file.flush()
             if writer:
-                for key in ("loss", "learning_rate", "seconds"):
+                for key in ("loss", "avr_loss", "learning_rate", "seconds"):
                     writer.add_scalar(f"train/{key}", metrics[key], step)
                 writer.flush()
             progress.update(1)
-            progress.set_postfix(loss=f"{total_loss:.5f}", lr=f"{lr:.2g}")
+            progress.set_postfix(avr_loss=f"{metrics['avr_loss']:.5f}", lr=f"{lr:.2g}")
             if step % config["checkpoint"]["save_steps"] == 0 or step == training["max_steps"]:
                 last_checkpoint = save_checkpoint(output_dir, model, optimizer, scheduler, scaler,
-                                                   step, stream, config, fingerprint)
+                                                   step, stream, config, fingerprint, loss_recorder)
                 print("저장 완료:", last_checkpoint)
     except KeyboardInterrupt:
         print("학습이 중단되었습니다. 완료된 마지막 정기 체크포인트:", last_checkpoint)

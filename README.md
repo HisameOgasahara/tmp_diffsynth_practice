@@ -22,7 +22,6 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|
 | 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, FM Euler 샘플링, VAE 디코딩 |
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 |
-| 예정 | 모델 학습 |
 
 ## 생성 예시
 
@@ -43,5 +42,3 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|
 | DiffSynth-Studio | 교재 및 Anima 모델 구현 출처 · Apache-2.0 |
 | ComfyUI | Anima 이미지 생성 참고 |
-
-향후 참고: Diffusers, [anima_lora](https://github.com/sorryhyun/anima_lora).

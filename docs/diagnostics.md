@@ -41,8 +41,6 @@ configure_diagnostics({
 # 이후 기존 load_dit / sample_euler / decode_image 호출
 ```
 
-`logging_utils.py`가 로그와 진행률 표시를, `profiling.py`가 profiler 설정·기록 구간·결과 저장을 담당합니다. `runtime.py`에는 단계 표시와 생성 스텝 경계만 연결되어 있습니다. profiler를 끄면 trace와 연산 요약을 생성하지 않습니다.
-
 ## 캐시 사용 시 진단
 
 로그의 `cache hit`는 모델 재사용, `cache miss`는 최초 로딩 또는 교체를 뜻합니다. 장치 이동 메시지에서 CPU↔GPU 전환을 확인할 수 있습니다.

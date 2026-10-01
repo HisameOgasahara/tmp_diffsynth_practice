@@ -1278,9 +1278,14 @@ class AnimaDiT(MiniTrainDIT):
         super().__init__(**kwargs)
         self.llm_adapter = LLMAdapter(device=kwargs.get("device"), dtype=kwargs.get("dtype"), operations=kwargs.get("operations"))
 
-    def preprocess_text_embeds(self, text_embeds, text_ids, t5xxl_weights=None):
+    def preprocess_text_embeds(self, text_embeds, text_ids, t5xxl_weights=None,
+                               target_attention_mask=None, source_attention_mask=None):
         if text_ids is not None:
-            out = self.llm_adapter(text_embeds, text_ids)
+            out = self.llm_adapter(text_embeds, text_ids,
+                                   target_attention_mask=target_attention_mask,
+                                   source_attention_mask=source_attention_mask)
+            if target_attention_mask is not None:
+                out = out.masked_fill(~target_attention_mask.bool().unsqueeze(-1), 0)
             if t5xxl_weights is not None:
                 out = out * t5xxl_weights
 
@@ -1299,7 +1304,11 @@ class AnimaDiT(MiniTrainDIT):
     ):
         t5xxl_ids = kwargs.pop("t5xxl_ids", None)
         if t5xxl_ids is not None:
-            context = self.preprocess_text_embeds(context, t5xxl_ids, t5xxl_weights=kwargs.pop("t5xxl_weights", None))
+            context = self.preprocess_text_embeds(
+                context, t5xxl_ids, t5xxl_weights=kwargs.pop("t5xxl_weights", None),
+                target_attention_mask=kwargs.pop("target_attention_mask", None),
+                source_attention_mask=kwargs.pop("source_attention_mask", None),
+            )
         return super().forward(
             x, timesteps, context,
             use_gradient_checkpointing=use_gradient_checkpointing, use_gradient_checkpointing_offload=use_gradient_checkpointing_offload,

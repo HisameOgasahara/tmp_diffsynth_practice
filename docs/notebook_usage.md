@@ -15,7 +15,7 @@ Colab에서 `anima_minimal_colab.ipynb`을 열고 아래 순서로 실행합니�
 | 6 | Anima text adapter, CFG, Euler 생성과 latent 저장 |
 | 7 | VAE 디코딩과 PNG 저장 |
 
-모델 가중치는 공개 HF `circlestone-labs/Anima`의 고정 revision에서 받으며, Qwen/T5 tokenizer도 HF에서 불러옵니다. Colab 기본 라이브러리와 이 저장소의 `src/anima_core/`를 사용합니다. 생성 설정과 prompt 기본값은 `DiffFlowDiT_test/config/generation.json`의 baseline을 따릅니다.
+모델 가중치는 공개 HF `circlestone-labs/Anima`의 고정 revision에서 받으며, Qwen/T5 tokenizer도 HF에서 불러옵니다.
 
 ## 반복 생성
 

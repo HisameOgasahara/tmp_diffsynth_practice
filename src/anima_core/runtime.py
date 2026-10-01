@@ -149,7 +149,10 @@ def encode_prompt(
     max_sequence_length=512,
     use_token_weights=False,
     return_token_weights=False,
+    return_attention_masks=False,
 ):
+    if return_attention_masks and use_token_weights:
+        raise ValueError("학습용 attention mask 반환은 토큰 가중치와 함께 사용할 수 없습니다.")
     if use_token_weights:
         qwen_inputs, t5_ids, t5_weights = tokenize_weighted_prompt(
             qwen_tokenizer, t5_tokenizer, prompt, max_sequence_length
@@ -163,7 +166,8 @@ def encode_prompt(
             return_tensors="pt",
         )
         t5_inputs = t5_tokenizer(
-            [prompt], max_length=max_sequence_length, truncation=True, return_tensors="pt"
+            [prompt], max_length=max_sequence_length, truncation=True, return_tensors="pt",
+            **({"padding": "max_length"} if return_attention_masks else {}),
         )
         t5_ids = t5_inputs.input_ids
         t5_weights = torch.ones((*t5_ids.shape, 1), dtype=torch.float32)
@@ -177,6 +181,9 @@ def encode_prompt(
         ).hidden_states[-1].to(dtype)
 
     t5_ids = t5_ids.to(device)
+    if return_attention_masks:
+        prompt_embeds = prompt_embeds.masked_fill(~attention_mask.unsqueeze(-1), 0)
+        return prompt_embeds, t5_ids, attention_mask, t5_inputs.attention_mask.to(device).bool()
     if return_token_weights:
         return prompt_embeds, t5_ids, t5_weights.to(device=device, dtype=dtype)
     return prompt_embeds, t5_ids

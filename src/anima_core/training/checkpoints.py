@@ -9,7 +9,7 @@ from .config import write_config
 from .lora import collect_lora_weights, restore_lora_weights
 
 
-def save_checkpoint(output_dir, model, optimizer, scheduler, scaler, step, stream, config, fingerprint):
+def save_checkpoint(output_dir, model, optimizer, scheduler, scaler, step, stream, config, fingerprint, loss_recorder):
     target = Path(output_dir) / f"step-{step:07d}"
     partial = target.with_name(target.name + ".partial")
     if target.exists() or partial.exists():
@@ -21,6 +21,7 @@ def save_checkpoint(output_dir, model, optimizer, scheduler, scaler, step, strea
         "version": 1, "step": step, "config": config, "fingerprint": fingerprint,
         "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
         "scaler": scaler.state_dict(), "stream": stream.state_dict(),
+        "loss_recorder": loss_recorder.state_dict(),
         "rng_cpu": torch.get_rng_state(),
         "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
     }

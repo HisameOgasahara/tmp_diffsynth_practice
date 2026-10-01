@@ -30,7 +30,8 @@ def validate_config(config):
         "dataset": {"resolution", "batch_size", "repeat", "caption_dropout_rate"},
         "lora": {"base_model", "rank", "alpha", "target_modules"},
         "training": {"optimizer", "learning_rate", "weight_decay", "lr_scheduler",
-                     "warmup_ratio", "max_steps", "gradient_accumulation_steps", "seed"},
+                     "warmup_ratio", "max_steps", "gradient_accumulation_steps", "seed",
+                     "max_grad_norm", "sigmoid_scale", "sigmoid_bias"},
         "runtime": {"mixed_precision", "use_gradient_checkpointing"},
         "checkpoint": {"save_steps"},
     }
@@ -55,6 +56,9 @@ def validate_config(config):
         ("training", "weight_decay", 0, math.inf),
         ("training", "learning_rate", 0, math.inf),
         ("lora", "alpha", 0, math.inf),
+        ("training", "max_grad_norm", 0, math.inf),
+        ("training", "sigmoid_scale", 0, math.inf),
+        ("training", "sigmoid_bias", -math.inf, math.inf),
     ):
         value = config[section][key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):

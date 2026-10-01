@@ -54,3 +54,9 @@ DiffSynth는 schedule과 기본 갱신을 `FlowMatchScheduler`에 함께 둡니�
 | `runtime.py` | 위 영역의 실행 순서 조율 |
 
 solver는 `model_fn(x, sigma, conditioning)`을 호출해 예측을 얻고 다음 latent를 계산하도록 분리합니다. Heun처럼 한 스텝에서 DiT 평가가 여러 번 필요한 방법이나 확률적 sampler를 추가할 때, 모델 정의와 solver를 서로 수정하지 않도록 하는 것이 목적입니다. 이 표는 계획이며 추가 sampler와 디렉터리 재배치는 아직 구현하지 않았습니다.
+
+## 학습 기능 계획
+
+| 기능 | 참고 방식 |
+|---|---|
+| 캡션 셔플 | [anima-lora](https://github.com/sorryhyun/anima_lora)의 캡션 변형 캐시·학습 중 선택 방식 |

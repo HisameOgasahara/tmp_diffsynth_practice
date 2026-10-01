@@ -51,6 +51,13 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 
 ![Anima LoRA 생성 예시](assets/examples/anima_lora.png)
 
+| 항목 | 값 |
+|---|---|
+| LoRA | 400스텝, 적용 강도 1.0 · [가중치 저장소](https://huggingface.co/Kamome33/anima_lora_test/tree/main) |
+| 생성 설정 | 1216×832, 30스텝, CFG 4.0, shift 3.0, denoise 1.0, fp16 |
+| 시드 | 무작위 (`random_seed = true`) |
+| 프롬프트·설정 원본 | [anima_minimal_config.json](assets/examples/anima_minimal_config.json) |
+
 ## 사용 안내
 
 - [노트북 사용](docs/notebook_usage.md): 최초 실행, 설정 변경, 반복 생성

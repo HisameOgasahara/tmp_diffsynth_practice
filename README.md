@@ -24,6 +24,21 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 |
 | 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 |
 
+## 학습 확인 환경
+
+| 항목 | 값 (2026-10-01 Colab) |
+|---|---|
+| Python | 3.13.15 |
+| PyTorch | 2.11.0+cu128 |
+| PyTorch CUDA / cuDNN | 12.8 / 9.19.0 |
+| NVIDIA 드라이버 | 580.82.07 |
+| GPU | Tesla T4, VRAM 15.0 GB |
+| 학습 설정 | 해상도 512, batch 4, repeat 6, bf16 · [TOML](configs/anima_lora.toml) |
+| 시스템 RAM (약 296스텝) | 3.2 / 12.7 GB |
+| GPU RAM (약 296스텝) | 7.3 / 15.0 GB |
+
+전체 Python 패키지 버전: [requirements-freeze.txt](docs/requirements-freeze.txt)
+
 ## 생성 예시
 
 ![Anima LoRA 생성 예시](assets/examples/anima_lora.png)

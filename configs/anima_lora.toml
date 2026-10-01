@@ -2,7 +2,7 @@
 # EXIF 방향 보정 후 RGB로 변환하고 중앙 정사각형 crop을 적용합니다.
 resolution = 512
 batch_size = 4
-repeat = 2
+repeat = 6
 caption_dropout_rate = 0.1
 
 [lora]
@@ -30,4 +30,4 @@ mixed_precision = "bf16"
 use_gradient_checkpointing = true
 
 [checkpoint]
-save_steps = 200
+save_steps = 50

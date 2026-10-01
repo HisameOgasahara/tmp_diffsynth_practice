@@ -38,6 +38,8 @@ def find_target_modules(model, search_for_linear=False, prefix=""):
         ]
     targets = []
     for name, module in model.named_children():
+        if name == "llm_adapter":
+            continue
         path = f"{prefix}.{name}".strip(".")
         targets.extend(find_target_modules(
             module, isinstance(module, nn.ModuleList) and len(module) > 1, path
@@ -51,6 +53,7 @@ def inject_lora(model, config):
         suffixes = [name.strip() for name in requested.split(",") if name.strip()]
         targets = [name for name, module in model.named_modules()
                    if isinstance(module, nn.Linear)
+                   and not name.startswith("llm_adapter.")
                    and any(name == suffix or name.endswith("." + suffix) for suffix in suffixes)]
         missing = [suffix for suffix in suffixes
                    if not any(name == suffix or name.endswith("." + suffix) for name in targets)]

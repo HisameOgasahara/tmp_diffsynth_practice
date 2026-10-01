@@ -73,7 +73,6 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
     dropout = config["dataset"]["caption_dropout_rate"]
     print(f"학습 가능 파라미터: {sum(p.numel() for p in parameters):,}")
     print(f"batch={batch_size}, accumulation={accumulation}, 유효 batch={batch_size * accumulation}")
-    print("캡션 조건을 고정 길이로 패딩하여 batch 전체를 함께 계산합니다.")
     progress = tqdm(total=training["max_steps"], initial=step, desc="LoRA optimizer 업데이트")
     try:
         while step < training["max_steps"]:
@@ -90,19 +89,15 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
                 samples = stream.take(batch_size)
                 conditions = [dataset.empty if torch.rand(()).item() < dropout else sample for sample in samples]
                 latent = torch.stack([sample["latent"] for sample in samples]).to(device=device, dtype=dtype)
-                embeds = torch.stack([condition["prompt_embeds"] for condition in conditions]).to(device=device, dtype=dtype)
-                ids = torch.stack([condition["t5_ids"] for condition in conditions]).to(device=device)
-                qwen_mask = torch.stack([condition["qwen_mask"] for condition in conditions]).to(device=device)
-                t5_mask = torch.stack([condition["t5_mask"] for condition in conditions]).to(device=device)
+                embeds = torch.stack([condition["crossattn_emb"] for condition in conditions]).to(device=device, dtype=dtype)
                 with torch.autocast(device_type=device.type, dtype=dtype, enabled=dtype != torch.float32):
-                    loss = loss_fn(model, latent, embeds, ids,
-                                   config["runtime"]["use_gradient_checkpointing"],
-                                   target_attention_mask=t5_mask, source_attention_mask=qwen_mask)
+                    loss = loss_fn(model, latent, embeds, None,
+                                   config["runtime"]["use_gradient_checkpointing"])
                 if not torch.isfinite(loss):
                     raise RuntimeError("loss에 비유한 값이 있습니다. precision과 학습률을 확인하세요.")
                 total_loss += float(loss.detach()) / accumulation
                 scaler.scale(loss / accumulation).backward()
-                del loss, latent, embeds, ids, qwen_mask, t5_mask
+                del loss, latent, embeds
             old_scale = scaler.get_scale()
             if training["max_grad_norm"] != 0:
                 scaler.unscale_(optimizer)
@@ -156,6 +151,7 @@ def train(config, cache_path, dit_path, output_dir, resume_from=None, device="cu
     model = load_dit(dit_path, device=device, dtype=dtype)
     try:
         targets = inject_lora(model, config["lora"])
+        del model.llm_adapter
         print(f"LoRA 적용 레이어: {len(targets)}개")
         (Path(output_dir).expanduser().resolve()).mkdir(parents=True, exist_ok=True)
         (Path(output_dir).expanduser().resolve() / "lora_targets.json").write_text(

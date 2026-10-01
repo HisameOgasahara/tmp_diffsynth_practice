@@ -9,7 +9,6 @@ caption_dropout_rate = 0.1
 base_model = "dit"
 rank = 32
 alpha = 128
-# DiffSynth Anima 예제와 동일하게 학습 대상 Linear 레이어를 자동 선택합니다.
 target_modules = ""
 
 [training]

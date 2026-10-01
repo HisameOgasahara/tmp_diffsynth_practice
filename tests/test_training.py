@@ -65,14 +65,9 @@ def make_dataset(path):
     for index in range(3):
         filename = f"{index}.safetensors"
         save_file({"latent": torch.randn(4, 1, 2, 2, generator=generator),
-                   "prompt_embeds": torch.randn(512, 4, generator=generator),
-                   "t5_ids": torch.arange(512),
-                   "qwen_mask": torch.arange(512) < index + 2,
-                   "t5_mask": torch.arange(512) < index + 2}, str(path / filename))
+                   "crossattn_emb": torch.randn(512, 4, generator=generator)}, str(path / filename))
         records.append({"file": filename})
-    save_file({"prompt_embeds": torch.zeros(512, 4), "t5_ids": torch.zeros(512, dtype=torch.long),
-               "qwen_mask": torch.arange(512) < 1,
-               "t5_mask": torch.arange(512) < 1},
+    save_file({"crossattn_emb": torch.zeros(512, 4)},
               str(path / "empty.safetensors"))
     (path / "manifest.json").write_text(json.dumps({"fingerprint": "tiny-fixture", "records": records}), encoding="utf-8")
     return CachedDataset(path)
@@ -98,6 +93,74 @@ class TrainingTests(unittest.TestCase):
         model.blocks = nn.ModuleList([nn.Sequential(nn.Linear(512, 512), nn.Linear(512, 128)) for _ in range(2)])
         model.outside = nn.Linear(512, 512)
         self.assertEqual(find_target_modules(model), ["blocks.0.0", "blocks.1.0"])
+
+    def test_adapter_is_excluded_from_auto_and_explicit_lora_targets(self):
+        model = nn.Module()
+        model.blocks = nn.ModuleList([nn.Sequential(nn.Linear(512, 512)) for _ in range(2)])
+        model.llm_adapter = nn.Module()
+        model.llm_adapter.blocks = nn.ModuleList([nn.Sequential(nn.Linear(512, 512)) for _ in range(2)])
+        self.assertEqual(find_target_modules(model), ["blocks.0.0", "blocks.1.0"])
+        config = make_config()["lora"]
+        config["target_modules"] = ""
+        targets = inject_lora(model, config)
+        self.assertEqual(targets, ["blocks.0.0", "blocks.1.0"])
+        self.assertTrue(all(not parameter.requires_grad for parameter in model.llm_adapter.parameters()))
+        latent = torch.randn(2, 512)
+        loss = sum(block(latent).square().mean() for block in model.blocks)
+        loss.backward()
+        self.assertTrue(all(parameter.grad is None for parameter in model.llm_adapter.parameters()))
+        self.assertFalse(any("llm_adapter" in name for name in collect_lora_weights(model)))
+        explicit = TinyDiT()
+        explicit.llm_adapter = TinyBlock()
+        config["target_modules"] = "proj"
+        self.assertEqual(inject_lora(explicit, config), ["blocks.0.proj", "blocks.1.proj"])
+        self.assertTrue(all(not parameter.requires_grad for parameter in explicit.llm_adapter.parameters()))
+        config["target_modules"] = "llm_adapter.proj"
+        with self.assertRaises(ValueError):
+            inject_lora(explicit, config)
+
+    def test_standalone_adapter_loads_only_prefixed_weights_and_freezes(self):
+        from anima_core.training.conditioning import load_llm_adapter
+
+        expected = {"weight": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+                    "bias": torch.tensor([1.0, 2.0, 3.0])}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dit.safetensors"
+            for prefix in ("net.llm_adapter.", "llm_adapter."):
+                weights = {prefix + name: tensor for name, tensor in expected.items()}
+                weights["net.blocks.0.unrelated"] = torch.ones(7)
+                save_file(weights, str(path))
+                adapter = nn.Linear(4, 3)
+                with patch("anima_core.training.conditioning.LLMAdapter", return_value=adapter):
+                    loaded = load_llm_adapter(path, device="cpu", dtype=torch.float32)
+                self.assertIs(loaded, adapter)
+                self.assertFalse(loaded.training)
+                self.assertTrue(all(not parameter.requires_grad for parameter in loaded.parameters()))
+                for name, tensor in loaded.state_dict().items():
+                    torch.testing.assert_close(tensor, expected[name])
+
+    def test_train_removes_adapter_before_optimizer_training(self):
+        from anima_core.training.trainer import train
+
+        config = make_config()
+        model = TinyDiT()
+        model.llm_adapter = TinyBlock()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset = make_dataset(root / "cache")
+            weights = root / "dit.safetensors"
+            weights.write_bytes(b"fixture")
+            stat = weights.stat()
+            dataset.manifest["identity"] = {"weights": {"dit": {
+                "path": str(weights.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}}}
+            (dataset.cache_path / "manifest.json").write_text(json.dumps(dataset.manifest), encoding="utf-8")
+            with patch("anima_core.runtime.load_dit", return_value=model), \
+                 patch("anima_core.training.trainer.train_model", return_value={"step": 4}) as trainer:
+                result = train(config, dataset.cache_path, weights, root / "output", device="cpu", tensorboard=False)
+            self.assertEqual(result, {"step": 4})
+            self.assertIs(trainer.call_args.args[0], model)
+            self.assertFalse(hasattr(model, "llm_adapter"))
+            self.assertFalse(any("llm_adapter" in name for name, _ in model.named_parameters()))
 
     def test_zero_init_and_only_lora_gradients_with_checkpoint(self):
         model = TinyDiT()
@@ -324,8 +387,10 @@ class TrainingTests(unittest.TestCase):
         batch_shapes = []
 
         def record_batch(module, args, kwargs):
-            batch_shapes.append((kwargs["x"].shape[0], kwargs["context"].shape[0],
-                                 kwargs["source_attention_mask"].shape, kwargs["target_attention_mask"].shape))
+            batch_shapes.append((kwargs["x"].shape[0], kwargs["context"].shape))
+            self.assertIsNone(kwargs["t5xxl_ids"])
+            self.assertNotIn("source_attention_mask", kwargs)
+            self.assertNotIn("target_attention_mask", kwargs)
 
         hook = model.register_forward_pre_hook(record_batch, with_kwargs=True)
         with tempfile.TemporaryDirectory() as temporary:
@@ -333,7 +398,7 @@ class TrainingTests(unittest.TestCase):
             train_model(model, config, make_dataset(root / "cache"), root / "output",
                         device="cpu", tensorboard=False)
         hook.remove()
-        self.assertEqual(batch_shapes, [(2, 2, torch.Size([2, 512]), torch.Size([2, 512]))] * 4)
+        self.assertEqual(batch_shapes, [(2, torch.Size([2, 512, 4]))] * 4)
 
     def test_trainer_clips_once_after_accumulation_before_optimizer_step(self):
         config = make_config()
@@ -397,6 +462,15 @@ class TrainingTests(unittest.TestCase):
             def encode(self, image, device):
                 return torch.zeros(1, 16, 1, image.shape[-2] // 8, image.shape[-1] // 8)
 
+        adapter_calls = []
+
+        class FakeAdapter(nn.Module):
+            def forward(self, source_hidden_states, target_input_ids,
+                        target_attention_mask=None, source_attention_mask=None):
+                adapter_calls.append((torch.is_grad_enabled(), target_attention_mask.clone(),
+                                      source_attention_mask.clone()))
+                return torch.full((*target_input_ids.shape, 4), 7.0)
+
         config = make_config()
         config["dataset"]["resolution"] = 32
         with tempfile.TemporaryDirectory() as temporary:
@@ -412,17 +486,28 @@ class TrainingTests(unittest.TestCase):
             with patch("anima_core.runtime.load_vae", return_value=FakeVAE()) as vae_loader, \
                  patch("anima_core.runtime.load_text_encoder"), \
                  patch("anima_core.runtime.load_tokenizers", return_value=(None, None)), \
+                 patch("anima_core.training.conditioning.load_llm_adapter", return_value=FakeAdapter()) as adapter_loader, \
                  patch("anima_core.runtime.encode_prompt", return_value=(
                      torch.zeros(1, 512, 4), torch.ones(1, 512, dtype=torch.long),
                      torch.arange(512).unsqueeze(0) < 3, torch.arange(512).unsqueeze(0) < 2)):
                 cache = prepare_cache(config, data, root / "cache", weights, "cpu")
                 dataset = CachedDataset(cache)
                 self.assertEqual(dataset[0]["latent"].shape, (16, 1, 4, 4))
-                self.assertEqual(dataset[0]["t5_ids"].shape, (512,))
-                self.assertEqual(dataset[0]["qwen_mask"].sum(), 3)
-                self.assertEqual(dataset[0]["t5_mask"].sum(), 2)
+                self.assertEqual(set(dataset[0]), {"latent", "crossattn_emb"})
+                self.assertEqual(set(dataset.empty), {"crossattn_emb"})
+                self.assertEqual(dataset.manifest["identity"]["version"], 3)
+                for tensors in (dataset[0], dataset.empty):
+                    self.assertEqual(tensors["crossattn_emb"].shape, (512, 4))
+                    self.assertTrue(torch.all(tensors["crossattn_emb"][:2] == 7))
+                    self.assertTrue(torch.all(tensors["crossattn_emb"][2:] == 0))
                 self.assertEqual(prepare_cache(config, data, root / "cache", weights, "cpu"), cache)
                 self.assertEqual(vae_loader.call_count, 1)
+                self.assertEqual(adapter_loader.call_count, 1)
+                self.assertEqual(len(adapter_calls), 2)
+                for grad_enabled, target_mask, source_mask in adapter_calls:
+                    self.assertFalse(grad_enabled)
+                    self.assertEqual(target_mask.sum(), 2)
+                    self.assertEqual(source_mask.sum(), 3)
 
     def test_resume_matches_uninterrupted_training_and_logs(self):
         config = make_config()

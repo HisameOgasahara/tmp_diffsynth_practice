@@ -1,5 +1,3 @@
-"""이미지·동명 TXT 캡션을 latent/Qwen 조건 캐시로 준비합니다."""
-
 import gc
 import hashlib
 import json
@@ -14,7 +12,7 @@ from tqdm.auto import tqdm
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 
 def discover_pairs(dataset_dir):
@@ -95,7 +93,6 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda"):
     qwen, t5 = load_tokenizers()
     text_encoder = load_text_encoder(weights["text_encoder"], device=device, dtype=dtype)
     try:
-        # Qwen 결과만 캐시합니다. DiT 내부의 llm_adapter는 LoRA 학습 대상일 수 있습니다.
         for pair, record in tqdm(list(zip(pairs, records)), desc="텍스트 조건 캐시"):
             embeds, ids, qwen_mask, t5_mask = encode_prompt(
                 text_encoder, qwen, t5, pair["caption"], device=device, dtype=dtype,
@@ -117,6 +114,30 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda"):
     finally:
         del text_encoder, qwen, t5
         release_cuda_memory()
+    from .conditioning import load_llm_adapter
+
+    adapter = load_llm_adapter(weights["dit"], device=device, dtype=dtype)
+    try:
+        with torch.no_grad():
+            for record in tqdm(records + [{"file": "empty.safetensors"}], desc="adapter 조건 캐시"):
+                path = cache_path / record["file"]
+                tensors = {name: tensor.clone() for name, tensor in load_file(str(path)).items()}
+                target_mask = tensors["t5_mask"].unsqueeze(0).to(device=device)
+                output = adapter(
+                    tensors["prompt_embeds"].unsqueeze(0).to(device=device, dtype=dtype),
+                    tensors["t5_ids"].unsqueeze(0).to(device=device),
+                    target_attention_mask=target_mask,
+                    source_attention_mask=tensors["qwen_mask"].unsqueeze(0).to(device=device),
+                )
+                output = output.masked_fill(~target_mask.bool().unsqueeze(-1), 0)
+                cached = {"crossattn_emb": output[0].cpu().contiguous()}
+                if "latent" in tensors:
+                    cached["latent"] = tensors["latent"]
+                save_file(cached, str(path))
+                del output, tensors, cached, target_mask
+    finally:
+        del adapter
+        release_cuda_memory()
     manifest = {"fingerprint": fingerprint, "identity": identity, "records": records}
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print("캐시 준비 완료:", cache_path)
@@ -135,8 +156,8 @@ class CachedDataset(Dataset):
             if not path.is_relative_to(self.cache_path) or not path.is_file():
                 raise ValueError(f"캐시 파일이 없거나 경로가 잘못되었습니다: {record['file']}")
         self.empty = load_file(str(self.cache_path / "empty.safetensors"))
-        if not {"qwen_mask", "t5_mask"}.issubset(self.empty):
-            raise ValueError("이전 학습 캐시에는 attention mask가 없습니다. 캐시 준비 단계를 다시 실행하세요.")
+        if "crossattn_emb" not in self.empty:
+            raise ValueError("이전 학습 캐시에는 adapter 출력이 없습니다. 캐시 준비 단계를 다시 실행하세요.")
 
     def __len__(self):
         return len(self.records)

@@ -12,7 +12,7 @@ TE(text encoder)와 text adapter는 LoRA 학습 대상에서 제외하며, text 
 
 | 항목 | 방향 |
 |---|---|
-| 교재 | `reference`의 DiffSynth-Studio |
+| 교재 | `reference`의 DiffSynth-Studio, [anima-lora](https://github.com/sorryhyun/anima_lora) |
 | 구현 방식 | 기존 코어 로직 활용, 프레임워크 주변 구조 제거 |
 | 코드 구성 | 필요한 구현을 이 리포에 포함하여 DiffSynth·Diffusers·ComfyUI 설치 없이 생성·학습 실행 |
 | 실행 의존성 | PyTorch 등 일반 라이브러리, 모델 가중치 |

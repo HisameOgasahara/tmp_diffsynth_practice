@@ -53,6 +53,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 
 | 항목 | 값 |
 |---|---|
+| 학습 캐릭터 | 헤븐 번즈 레드의 [시라카와 유이나(白河ユイナ)](https://heaven-burns-red.com/character/30g/shirakawa-yuina/), 제30G부대 부대장 |
 | LoRA | 400스텝, 적용 강도 1.0 · [가중치 저장소](https://huggingface.co/Kamome33/anima_lora_test/tree/main) |
 | 생성 설정 | 1216×832, 30스텝, CFG 4.0, shift 3.0, denoise 1.0, fp16 |
 | 시드 | 무작위 (`random_seed = true`) |

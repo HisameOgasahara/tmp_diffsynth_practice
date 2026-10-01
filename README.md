@@ -8,7 +8,7 @@
 
 Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습하고, 생성·학습 코드를 이 저장소 안에서 완결하는 프로젝트입니다.
 
-TE(text encoder)는 LoRA 학습 대상에서 제외합니다.
+TE(text encoder)와 text adapter는 LoRA 학습 대상에서 제외하며, text adapter 출력은 미리 캐시해 학습에 사용합니다.
 
 | 항목 | 방향 |
 |---|---|

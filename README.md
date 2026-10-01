@@ -23,6 +23,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, FM Euler 샘플링, VAE 디코딩 |
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 |
 | 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 |
+| 예정 | 캡션 셔플: [anima-lora](https://github.com/sorryhyun/anima_lora)의 캡션 변형 캐시·학습 중 선택 방식 참고 |
 
 ## 학습 확인 환경
 

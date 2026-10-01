@@ -57,4 +57,5 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 프로젝트 | 활용 |
 |---|---|
 | DiffSynth-Studio | 교재 및 Anima 모델 구현 출처 · Apache-2.0 |
+| [anima-lora](https://github.com/sorryhyun/anima_lora) | LoRA 학습 구현 참고 |
 | ComfyUI | Anima 이미지 생성 참고 |

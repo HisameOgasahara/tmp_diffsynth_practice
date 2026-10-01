@@ -1,8 +1,8 @@
-# anima_lora_cli_colab.ipynb의 폼 기본값을 바탕으로 한 일반 LoRA 학습 설정.
-# anima_core.training과 anima_lora_train_colab.ipynb에서 읽는 학습 설정.
+# irodori_test/anima_lora_cli_colab.ipynb에서 사용한 일반 LoRA 기본값을
+# 이 저장소의 anima_core.training 설정 형식에 맞춰 옮긴 설정입니다.
+# 이 저장소가 지원하지 않는 Irodori 전용 기능은 포함하지 않습니다.
 
 [dataset]
-# EXIF 방향 보정 후 RGB로 변환하고 중앙 정사각형 crop을 적용합니다.
 resolution = 512
 batch_size = 4
 repeat = 2
@@ -11,20 +11,17 @@ caption_dropout_rate = 0.1
 [lora]
 base_model = "dit"
 rank = 32
-# 기존 노트북 값 유지. LoRA 출력에 alpha / rank 배율을 적용합니다.
 alpha = 128
-# DiffSynth Anima 예제와 동일하게 학습 대상 Linear 레이어를 자동 선택합니다.
+# 현재 trainer가 빈 문자열일 때 학습 가능한 Linear LoRA 대상을 자동 선택합니다.
 target_modules = ""
 
 [training]
 optimizer = "AdamW"
 learning_rate = 2e-5
-# DiffSynth runner의 기본값. 기존 노트북의 프리셋 상속값은 확인하지 않았습니다.
+# Irodori의 AdamW에 별도 optimizer_args가 없어서 torch.optim.AdamW 기본값과 동일합니다.
 weight_decay = 0.01
 lr_scheduler = "cosine"
-# 전체 optimizer 업데이트 수에 대한 비율. 2,400 업데이트에서는 120입니다.
 warmup_ratio = 0.05
-# max_steps와 저장 간격은 gradient accumulation 이후 optimizer 업데이트 기준.
 max_steps = 2400
 gradient_accumulation_steps = 1
 seed = 42

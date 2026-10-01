@@ -18,11 +18,11 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 
 ## 현재 구현 상태
 
-| 상태 | 기능 |
-|---|---|
-| 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, FM Euler 샘플링, VAE 디코딩 |
-| 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 |
-| 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 |
+| 상태 | 기능 | 계획 |
+|---|---|---|
+| 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, FM Euler 샘플링, VAE 디코딩 | [런타임 분리](docs/runtime_modularization.md#향후-분리) |
+| 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 | — |
+| 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 | [학습 기능](docs/runtime_modularization.md#학습-기능-계획) |
 
 ## 학습 확인 환경
 

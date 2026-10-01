@@ -1,4 +1,4 @@
-# DiT · Flow Matching 학습 프로젝트
+# DiT · Flow Matching 학습 실습
 
 **T2I 생성**  
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/main/anima_minimal_colab.ipynb)

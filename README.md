@@ -8,8 +8,6 @@
 
 Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습하고, 생성·학습 코드를 이 저장소 안에서 완결하는 프로젝트입니다.
 
-TE(text encoder)와 text adapter는 LoRA 학습 대상에서 제외하며, text adapter 출력은 미리 캐시해 학습에 사용합니다.
-
 | 항목 | 방향 |
 |---|---|
 | 교재 | `reference`의 DiffSynth-Studio, [anima-lora](https://github.com/sorryhyun/anima_lora) |
@@ -24,6 +22,7 @@ TE(text encoder)와 text adapter는 LoRA 학습 대상에서 제외하며, text 
 |---|---|
 | 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, FM Euler 샘플링, VAE 디코딩 |
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 |
+| 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 |
 
 ## 생성 예시
 

@@ -16,6 +16,14 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 실행 의존성 | PyTorch 등 일반 라이브러리, 모델 가중치 |
 | 실행 환경 | 모델·생성·학습 모듈을 Colab 전용 코드와 분리 |
 
+| 영역 | Anima 핵심 구조·현재 실습 방식 |
+|---|---|
+| 이미지 표현 | Qwen-Image VAE의 16채널 latent 사용, 이미지 크기를 가로·세로 각각 1/8로 압축 |
+| DiT | latent를 2×2 패치로 나눠 28개 블록에서 처리. RoPE 위치 표현, 텍스트 cross-attention, 시간 조건 AdaLN 사용 |
+| 텍스트 조건 | Qwen3-0.6B 출력과 T5 tokenizer의 토큰 ID를 6층 LLMAdapter로 결합해 DiT에 전달 |
+| 생성 | 노이즈 latent에서 RF 속도를 예측해 CFG·Euler로 갱신한 뒤 VAE로 디코딩. 현재 실습은 DiffSynth의 Z-Image schedule 사용 |
+| LoRA 학습 | 데이터·노이즈의 직선 보간과 속도 예측 MSE로 학습. DiT에 LoRA를 적용하고 TE·text adapter는 고정하며, VAE latent·adapter 출력은 사전 캐시 |
+
 ## 현재 구현 상태
 
 | 상태 | 기능 | 계획 |

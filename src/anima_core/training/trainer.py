@@ -14,6 +14,7 @@ from .dataset import CachedDataset, SampleStream, release_cuda_memory
 from .flow_matching import FlowMatchingLoss
 from .lora import inject_lora
 from .loss_recorder import LossRecorder
+from .optimizers import create_optimizer
 
 
 def create_scheduler(optimizer, training):
@@ -49,7 +50,7 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
     parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if not parameters:
         raise ValueError("학습할 LoRA 파라미터가 없습니다.")
-    optimizer = torch.optim.AdamW(parameters, lr=training["learning_rate"], weight_decay=training["weight_decay"])
+    optimizer = create_optimizer(parameters, training)
     scheduler = create_scheduler(optimizer, training)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and dtype == torch.float16)
     step = 0

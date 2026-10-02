@@ -6,6 +6,12 @@
 **LoRA 훈련**  
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/main/anima_lora_train_colab.ipynb?forceEdit=true&sandboxMode=true)
 
+**Muon LoRA 훈련 · GPU Colab**
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/feat/muon-optimizer/anima_lora_muon_train_colab.ipynb?forceEdit=true&sandboxMode=true)
+
+Muon 노트북은 기존 LoRA 학습 순서를 유지하며 `configs/anima_lora_muon.toml`을 사용합니다. LoRA A/B 행렬 모두 Muon에 전달하고, 기본 학습률은 탐색 시작값 0.00005입니다. momentum 0.95, Nesterov, Newton–Schulz 5회, `adjust_lr_fn="original"`을 사용합니다. Muon을 지원하는 PyTorch 2.11 이상 CUDA 런타임에서 실행하세요. 4번 셀의 `OPTIMIZER`에서 Muon / AdamW를 선택하며 기본값은 Muon입니다. AdamW를 선택하면 기존 AdamW TOML과 학습 경로를 사용합니다. 기존 AdamW 노트북·설정은 유지됩니다. 학습률은 warmup 종료 이후 검증 loss와 생성 결과를 보고 선택하세요.
+
 Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습하고, 생성·학습 코드를 이 저장소 안에서 완결하는 프로젝트입니다.
 
 | 항목 | 방향 |

@@ -35,6 +35,8 @@ def validate_config(config):
         "runtime": {"mixed_precision", "use_gradient_checkpointing"},
         "checkpoint": {"save_steps"},
     }
+    if config.get("training", {}).get("optimizer") == "Muon":
+        fields["training"] |= {"momentum", "nesterov", "ns_steps", "adjust_lr_fn"}
     if set(config) != set(fields):
         raise ValueError(f"설정 섹션은 {sorted(fields)}이어야 합니다.")
     for section, keys in fields.items():
@@ -73,8 +75,19 @@ def validate_config(config):
         raise ValueError("현재 학습 대상은 dit입니다.")
     if not isinstance(config["lora"]["target_modules"], str):
         raise ValueError("target_modules는 쉼표로 구분한 문자열이어야 합니다.")
-    if config["training"]["optimizer"] != "AdamW":
-        raise ValueError("현재 optimizer는 AdamW입니다.")
+    if config["training"]["optimizer"] not in {"AdamW", "Muon"}:
+        raise ValueError("optimizer는 AdamW 또는 Muon입니다.")
+    if config["training"]["optimizer"] == "Muon":
+        training = config["training"]
+        momentum = training["momentum"]
+        if isinstance(momentum, bool) or not isinstance(momentum, (int, float)) or not math.isfinite(momentum) or not 0 <= momentum < 1:
+            raise ValueError("momentum은 0 이상 1 미만의 유한한 수여야 합니다.")
+        if type(training["nesterov"]) is not bool:
+            raise ValueError("nesterov는 bool이어야 합니다.")
+        if type(training["ns_steps"]) is not int or not 1 <= training["ns_steps"] < 100:
+            raise ValueError("ns_steps는 1 이상 100 미만의 정수여야 합니다.")
+        if training["adjust_lr_fn"] not in {"original", "match_rms_adamw"}:
+            raise ValueError("adjust_lr_fn은 original 또는 match_rms_adamw입니다.")
     if config["training"]["lr_scheduler"] not in {"cosine", "constant"}:
         raise ValueError("lr_scheduler는 cosine 또는 constant입니다.")
     if type(config["training"]["seed"]) is not int or config["training"]["seed"] < 0:

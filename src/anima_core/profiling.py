@@ -16,7 +16,7 @@ from .logging_utils import logger
 @dataclass(frozen=True)
 class ProfileOptions:
     enabled: bool = False
-    stages: tuple = ("sample_euler",)
+    stages: tuple = ("sample_latents",)
     output_dir: str = "profiles"
     wait: int = 0
     warmup: int = 1

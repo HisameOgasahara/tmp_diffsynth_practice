@@ -21,14 +21,14 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 이미지 표현 | Qwen-Image VAE의 16채널 latent 사용, 이미지 크기를 가로·세로 각각 1/8로 압축 |
 | DiT | latent를 2×2 패치로 나눠 28개 블록에서 처리. RoPE 위치 표현, 텍스트 cross-attention, 시간 조건 AdaLN 사용 |
 | 텍스트 조건 | Qwen3-0.6B 출력과 T5 tokenizer의 토큰 ID를 6층 LLMAdapter로 결합해 DiT에 전달 |
-| 생성 | 노이즈 latent에서 RF 속도를 예측해 CFG·Euler로 갱신한 뒤 VAE로 디코딩. 현재 실습은 DiffSynth의 Z-Image schedule 사용 |
+| 생성 | 노이즈 latent에서 RF 속도를 예측해 CFG·선택 sampler로 갱신한 뒤 VAE로 디코딩. 공통 Z-Image schedule 사용 |
 | LoRA 학습 | 데이터·노이즈의 직선 보간과 속도 예측 MSE로 학습. DiT에 LoRA를 적용하고 TE·text adapter는 고정하며, VAE latent·adapter 출력은 사전 캐시 |
 
 ## 현재 구현 상태
 
 | 상태 | 기능 | 계획 |
 |---|---|---|
-| 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, FM Euler 샘플링, VAE 디코딩 | [런타임 분리](docs/runtime_modularization.md#향후-분리) |
+| 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, 생성 sampler 6종, VAE 디코딩 | [샘플러](docs/sampling.md) · [런타임 구조](docs/runtime_modularization.md) |
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 | — |
 | 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 | [학습 기능](docs/runtime_modularization.md#학습-기능-계획) |
 
@@ -62,6 +62,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 ## 사용 안내
 
 - [노트북 사용](docs/notebook_usage.md): 최초 실행, 설정 변경, 반복 생성
+- [생성 샘플러](docs/sampling.md): Euler, Heun, Euler ancestral RF, DPM++ 2M·2M SDE, ER-SDE
 - [LoRA](docs/lora.md): 파일 준비, 지원 형식, 가중치 합산
 - [토큰 가중치](docs/prompt_weights.md): 괄호 문법과 conditioning 처리
 - [모델 캐시](docs/model_cache.md): CPU 보관, GPU 이동, 교체와 초기화
@@ -74,4 +75,4 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|
 | [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio) | 교재 및 Anima 모델 구현 출처 · Apache-2.0 |
 | [anima-lora](https://github.com/sorryhyun/anima_lora) | LoRA 학습 구현 참고 |
-| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Anima 이미지 생성 참고 |
+| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Anima 이미지 생성 참고, 샘플러 갱신식·Brownian noise 구현 출처 · [GPL-3.0](licenses/ComfyUI-LICENSE) |

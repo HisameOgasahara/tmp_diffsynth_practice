@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 
 import numpy as np
 import torch
@@ -14,6 +15,10 @@ from .profiling import configure_profiler, advance_profile_step, profile_range, 
 from .text_encoder import ZImageTextEncoder
 from .vae import WanVideoVAE
 from .prompt_weights import tokenize_weighted_prompt
+from .sampling import SAMPLERS
+from .sampling.model_prediction import ModelPrediction
+from .sampling.noise import create_noise_sampler, create_brownian_noise_sampler
+from .sampling.schedules import create_sigmas, offset_first_sigma, z_image_schedule
 
 
 ANIMA_REPO = "circlestone-labs/Anima"
@@ -197,17 +202,10 @@ def adapt_conditioning(dit, prompt_embeds, t5_ids, t5_weights=None):
         return dit.preprocess_text_embeds(prompt_embeds, t5_ids, t5xxl_weights=t5_weights)
 
 
-def z_image_schedule(steps, denoise=1.0, shift=3.0):
-    sigmas = torch.linspace(float(denoise), 0.0, int(steps) + 1, dtype=torch.float32)[:-1]
-    sigmas = float(shift) * sigmas / (1.0 + (float(shift) - 1.0) * sigmas)
-    timesteps = sigmas * 1000.0
-    return sigmas, timesteps
-
-
 @torch.inference_mode()
-@log_stage("Euler 이미지 생성")
-@profile_stage("sample_euler", stepped=True)
-def sample_euler(
+@log_stage("이미지 latent 생성")
+@profile_stage("sample_latents", stepped=True)
+def sample_latents(
     dit,
     positive,
     negative,
@@ -220,8 +218,24 @@ def sample_euler(
     shift=3.0,
     device="cuda",
     dtype=torch.float16,
+    sampler="euler",
+    eta=1.0,
+    s_noise=1.0,
 ):
-    logger.info("생성 설정: %sx%s, steps=%s, CFG=%s, seed=%s", width, height, steps, cfg_scale, seed)
+    if sampler not in SAMPLERS:
+        raise ValueError(f"알 수 없는 sampler: {sampler}, 사용 가능: {list(SAMPLERS)}")
+    if isinstance(steps, bool) or int(steps) != steps or int(steps) < 1:
+        raise ValueError("steps는 1 이상의 정수여야 합니다.")
+    if not math.isfinite(float(denoise)) or not 0 < float(denoise) <= 1:
+        raise ValueError("denoise는 0보다 크고 1 이하여야 합니다.")
+    if not math.isfinite(float(shift)) or float(shift) <= 0:
+        raise ValueError("shift는 0보다 큰 유한한 값이어야 합니다.")
+    if not math.isfinite(float(eta)) or not 0 <= float(eta) <= 1:
+        raise ValueError("eta는 0 이상 1 이하여야 합니다.")
+    if not math.isfinite(float(s_noise)) or float(s_noise) < 0:
+        raise ValueError("s_noise는 0 이상의 유한한 값이어야 합니다.")
+    logger.info("생성 설정: %sx%s, sampler=%s, steps=%s, CFG=%s, seed=%s",
+                width, height, sampler, steps, cfg_scale, seed)
     generator = torch.Generator("cpu").manual_seed(int(seed))
     latents = torch.randn(
         (1, 16, int(height) // 8, int(width) // 8),
@@ -230,44 +244,39 @@ def sample_euler(
         dtype=dtype,
     ).to(device)
 
-    sigmas, timesteps = z_image_schedule(steps, denoise=denoise, shift=shift)
+    sigmas = create_sigmas(steps, denoise, shift)
+    options = {}
+    if sampler in {"euler_ancestral", "er_sde"}:
+        options.update(s_noise=float(s_noise), noise_sampler=create_noise_sampler(latents, seed))
+    if sampler == "euler_ancestral":
+        options["eta"] = float(eta)
+    if sampler == "dpmpp_2m_sde":
+        options.update(eta=float(eta), s_noise=float(s_noise))
+        if int(steps) > 1 and eta > 0 and s_noise > 0:
+            options["noise_sampler"] = create_brownian_noise_sampler(latents, sigmas, seed)
+    if sampler in {"dpmpp_2m_sde", "er_sde"}:
+        sigmas = offset_first_sigma(sigmas, shift)
+    prediction = ModelPrediction(dit, positive, negative, cfg_scale)
+    progress = track_progress(range(int(steps)), f"{sampler} 생성", total=int(steps))
 
-    for i, timestep in enumerate(track_progress(timesteps, "Euler 생성", total=len(timesteps))):
-        t = timestep.reshape(1).to(device=device, dtype=dtype) / 1000.0
-
-        with profile_range("sampling/positive_dit"):
-            positive_pred = dit(
-                x=latents.unsqueeze(2),
-                timesteps=t,
-                context=positive,
-                t5xxl_ids=None,
-            ).squeeze(2)
-
-        if float(cfg_scale) == 1.0:
-            velocity = positive_pred
-        else:
-            with profile_range("sampling/negative_dit"):
-                negative_pred = dit(
-                    x=latents.unsqueeze(2),
-                    timesteps=t,
-                    context=negative,
-                    t5xxl_ids=None,
-                ).squeeze(2)
-            with profile_range("sampling/cfg"):
-                velocity = negative_pred + float(cfg_scale) * (positive_pred - negative_pred)
-
-        sigma = sigmas[i].to(device=device, dtype=latents.dtype)
-        sigma_next = (
-            sigmas[i + 1].to(device=device, dtype=latents.dtype)
-            if i + 1 < len(sigmas)
-            else torch.zeros((), device=device, dtype=latents.dtype)
-        )
-        with profile_range("sampling/euler_update"):
-            latents = latents + velocity * (sigma_next - sigma)
-        logger.debug("생성 스텝 %d/%d 완료", i + 1, len(timesteps))
+    def advance_step(i):
+        progress.update(1)
+        logger.debug("생성 스텝 %d/%d 완료", i + 1, steps)
         advance_profile_step()
 
-    return latents
+    try:
+        return SAMPLERS[sampler](prediction, latents, sigmas, callback=advance_step, **options)
+    finally:
+        progress.close()
+
+
+@torch.inference_mode()
+@profile_stage("sample_euler", stepped=True)
+def sample_euler(dit, positive, negative, height, width, seed, steps, cfg_scale,
+                 denoise=1.0, shift=3.0, device="cuda", dtype=torch.float16):
+    """기존 Python 호출을 유지하는 Euler 생성 진입점."""
+    return sample_latents(dit, positive, negative, height, width, seed, steps, cfg_scale,
+                          denoise, shift, device, dtype, sampler="euler")
 
 
 @torch.inference_mode()

@@ -8,11 +8,11 @@ Colab에서 `anima_minimal_colab.ipynb`을 열고 아래 순서로 실행합니�
 |---|---|
 | 1 | 일반 Python 라이브러리 설치 |
 | 2 | 실습 저장소 clone 또는 최신 코드 반영 |
-| 3 | prompt, seed, steps, CFG, 크기와 선택 기능 설정 |
+| 3 | prompt, seed, sampler, steps, CFG, 크기와 선택 기능 설정 |
 | 4 | Anima 가중치 다운로드/캐시 확인; 선택 실행 |
 | 4-1 | LoRA 파일 준비와 강도 설정; 선택 실행 |
 | 5 | Qwen prompt encoding과 conditioning 파일 저장 |
-| 6 | Anima text adapter, CFG, Euler 생성과 latent 저장 |
+| 6 | Anima text adapter, CFG, 선택 sampler 생성과 latent 저장 |
 | 7 | VAE 디코딩과 PNG 저장 |
 
 모델 가중치는 공개 HF `circlestone-labs/Anima`의 고정 revision에서 받으며, Qwen/T5 tokenizer도 HF에서 불러옵니다.
@@ -22,7 +22,7 @@ Colab에서 `anima_minimal_colab.ipynb`을 열고 아래 순서로 실행합니�
 | 변경한 항목 | 다시 실행할 셀 |
 |---|---|
 | prompt, negative prompt, 토큰 가중치 | 3 → LoRA 사용 시 4-1 → 5 → 6 → 7 |
-| seed, steps, CFG, 크기, shift, denoise | 3 → LoRA 사용 시 4-1 → 6 → 7 |
+| seed, sampler, eta, s_noise, steps, CFG, 크기, shift, denoise | 3 → LoRA 사용 시 4-1 → 6 → 7 |
 | LoRA 파일 또는 강도 | 4-1 → 6 → 7 |
 | 로그·프로파일러·모델 캐시 옵션 | 3 → LoRA 사용 시 4-1 → 필요한 실행 단계 |
 
@@ -34,6 +34,7 @@ Colab에서 `anima_minimal_colab.ipynb`을 열고 아래 순서로 실행합니�
 
 ## 선택 기능
 
+- [생성 샘플러](sampling.md)
 - [LoRA](lora.md)
 - [토큰 가중치](prompt_weights.md)
 - [모델 캐시](model_cache.md)

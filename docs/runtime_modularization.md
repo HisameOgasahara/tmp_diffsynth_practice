@@ -12,17 +12,21 @@
 | `text_encoder.py` | Qwen 기반 text encoder |
 | `vae.py` | latent와 이미지 변환 |
 | `ops.py` | attention 등 공통 연산 |
-| `runtime.py` | 모델 로딩, conditioning, schedule, CFG, Euler, decode 연결 |
+| `runtime.py` | 모델 로딩, conditioning, 생성 sampler 선택, decode 연결 |
+| `sampling/model_prediction.py` | DiT 호출, CFG, velocity·denoised 변환 |
+| `sampling/schedules.py` | Z-Image schedule과 RF 시작 sigma 보정 |
+| `sampling/noise.py` | 추가 정규 노이즈와 Brownian noise |
+| `sampling/euler.py`, `heun.py`, `dpmpp.py`, `er_sde.py` | sampler별 갱신식과 예측 이력 |
 | `lora.py` | [LoRA 가중치 합산](lora.md) |
 | `prompt_weights.py` | [토큰 가중치 해석](prompt_weights.md) |
 | `model_cache.py` | [모델 보관과 장치 이동](model_cache.md) |
 | `logging_utils.py`, `profiling.py` | [로그와 병목 진단](diagnostics.md) |
 
-모델 정의는 분리되어 있으나, 기본 T2I 실행 흐름은 아직 `runtime.py`에 모여 있습니다.
+모델 정의와 생성 샘플링은 분리되어 있습니다. `runtime.py`는 T2I 실행 순서를 연결하며, 모델 로딩과 conditioning 함수는 이 파일에 남아 있습니다.
 
 ```text
 모델·tokenizer 준비 → prompt encoding → Anima conditioning
-→ 초기 noise → schedule → DiT 예측·CFG → Euler 갱신 → VAE decode
+→ 초기 noise → schedule → 선택 sampler·DiT 예측·CFG → VAE decode
 ```
 
 ## DiffSynth와의 대응
@@ -33,13 +37,13 @@
 | `load_tokenizers`, `encode_prompt`, `adapt_conditioning` | Anima pipeline과 prompt embedder |
 | noise 준비 | AnimaUnit_NoiseInitializer |
 | `z_image_schedule` | FlowMatchScheduler의 Z-Image schedule |
-| `sample_euler` 내부 CFG | BasePipeline의 CFG model function |
-| Euler latent 갱신 | FlowMatchScheduler.step |
+| `ModelPrediction.velocity` | BasePipeline의 CFG model function |
+| `sampling/euler.py` latent 갱신 | FlowMatchScheduler.step |
 | `decode_image` | VAE와 pipeline의 이미지 변환 |
 
-현재 sampler는 DiffSynth native의 Z-Image FlowMatch Euler입니다. schedule은 sigma/timestep을 만들고, 갱신은 `x_next = x + velocity * (sigma_next - sigma)`를 계산합니다. ComfyUI baseline의 ER-SDE는 구현하지 않았습니다.
+공통 schedule은 DiffSynth의 Z-Image 방식입니다. 기본 Euler는 `x_next = x + velocity * (sigma_next - sigma)`를 계산하며, 기존 연산 순서를 유지합니다. Heun, RF Euler ancestral, DPM++ 2M, RF DPM++ 2M SDE, RF ER-SDE도 선택할 수 있습니다. 세부 설정과 구현 출처는 [생성 샘플러](sampling.md)를 참고하세요.
 
-DiffSynth는 schedule과 기본 갱신을 `FlowMatchScheduler`에 함께 둡니다. 여러 solver를 실험하려면 두 책임을 분리하는 편이 적합합니다.
+DiffSynth는 schedule과 기본 갱신을 `FlowMatchScheduler`에 함께 둡니다. 이 저장소는 여러 solver를 비교할 수 있도록 두 책임을 분리했습니다.
 
 ## 향후 분리
 
@@ -48,12 +52,9 @@ DiffSynth는 schedule과 기본 갱신을 `FlowMatchScheduler`에 함께 둡니�
 | `models/` | 기존 모델 정의 |
 | `model_loader.py` | 가중치 다운로드와 모델 로딩 |
 | `conditioning.py` | tokenization, Qwen encoding, Anima adapter |
-| `schedules/` | 방문할 sigma/timestep 결정 |
-| `model_fn` | DiT 평가와 CFG로 velocity 반환 |
-| `samplers/` | Euler, Heun, midpoint, ancestral, ER-SDE 등 갱신 규칙 |
-| `runtime.py` | 위 영역의 실행 순서 조율 |
+| `runtime.py` | 분리한 모델 로딩·conditioning의 실행 순서 조율 |
 
-solver는 `model_fn(x, sigma, conditioning)`을 호출해 예측을 얻고 다음 latent를 계산하도록 분리합니다. Heun처럼 한 스텝에서 DiT 평가가 여러 번 필요한 방법이나 확률적 sampler를 추가할 때, 모델 정의와 solver를 서로 수정하지 않도록 하는 것이 목적입니다. 이 표는 계획이며 추가 sampler와 디렉터리 재배치는 아직 구현하지 않았습니다.
+생성 solver는 `ModelPrediction`을 통해 velocity 또는 denoised를 얻고 다음 latent를 계산합니다. Heun의 추가 평가와 확률적 sampler의 노이즈·이력은 각 sampler 안에서 처리합니다. 위 표의 모델·로더·conditioning 추가 분리는 향후 계획이며 이번 샘플러 도입에 포함하지 않습니다.
 
 ## 학습 기능 계획
 

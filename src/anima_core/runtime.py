@@ -1,5 +1,4 @@
 from pathlib import Path
-import math
 
 import numpy as np
 import torch
@@ -15,10 +14,9 @@ from .profiling import configure_profiler, advance_profile_step, profile_range, 
 from .text_encoder import ZImageTextEncoder
 from .vae import WanVideoVAE
 from .prompt_weights import tokenize_weighted_prompt
-from .sampling import SAMPLERS
+from .sampling.runner import run_sampler, validate_sampling_options
 from .sampling.model_prediction import ModelPrediction
-from .sampling.noise import create_noise_sampler, create_brownian_noise_sampler
-from .sampling.schedules import create_sigmas, offset_first_sigma, z_image_schedule
+from .sampling.schedules import z_image_schedule
 
 
 ANIMA_REPO = "circlestone-labs/Anima"
@@ -222,18 +220,7 @@ def sample_latents(
     eta=1.0,
     s_noise=1.0,
 ):
-    if sampler not in SAMPLERS:
-        raise ValueError(f"알 수 없는 sampler: {sampler}, 사용 가능: {list(SAMPLERS)}")
-    if isinstance(steps, bool) or int(steps) != steps or int(steps) < 1:
-        raise ValueError("steps는 1 이상의 정수여야 합니다.")
-    if not math.isfinite(float(denoise)) or not 0 < float(denoise) <= 1:
-        raise ValueError("denoise는 0보다 크고 1 이하여야 합니다.")
-    if not math.isfinite(float(shift)) or float(shift) <= 0:
-        raise ValueError("shift는 0보다 큰 유한한 값이어야 합니다.")
-    if not math.isfinite(float(eta)) or not 0 <= float(eta) <= 1:
-        raise ValueError("eta는 0 이상 1 이하여야 합니다.")
-    if not math.isfinite(float(s_noise)) or float(s_noise) < 0:
-        raise ValueError("s_noise는 0 이상의 유한한 값이어야 합니다.")
+    validate_sampling_options(sampler, steps, denoise, shift, eta, s_noise)
     logger.info("생성 설정: %sx%s, sampler=%s, steps=%s, CFG=%s, seed=%s",
                 width, height, sampler, steps, cfg_scale, seed)
     generator = torch.Generator("cpu").manual_seed(int(seed))
@@ -244,18 +231,6 @@ def sample_latents(
         dtype=dtype,
     ).to(device)
 
-    sigmas = create_sigmas(steps, denoise, shift)
-    options = {}
-    if sampler in {"euler_ancestral", "er_sde"}:
-        options.update(s_noise=float(s_noise), noise_sampler=create_noise_sampler(latents, seed))
-    if sampler == "euler_ancestral":
-        options["eta"] = float(eta)
-    if sampler == "dpmpp_2m_sde":
-        options.update(eta=float(eta), s_noise=float(s_noise))
-        if int(steps) > 1 and eta > 0 and s_noise > 0:
-            options["noise_sampler"] = create_brownian_noise_sampler(latents, sigmas, seed)
-    if sampler in {"dpmpp_2m_sde", "er_sde"}:
-        sigmas = offset_first_sigma(sigmas, shift)
     prediction = ModelPrediction(dit, positive, negative, cfg_scale)
     progress = track_progress(range(int(steps)), f"{sampler} 생성", total=int(steps))
 
@@ -265,7 +240,8 @@ def sample_latents(
         advance_profile_step()
 
     try:
-        return SAMPLERS[sampler](prediction, latents, sigmas, callback=advance_step, **options)
+        return run_sampler(prediction, latents, sampler, steps, seed, denoise, shift,
+                           eta, s_noise, callback=advance_step)
     finally:
         progress.close()
 

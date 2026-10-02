@@ -21,3 +21,8 @@ def offset_first_sigma(sigmas, shift):
         first = 1.0 - 1e-4
         sigmas[0] = float(shift) * first / (1.0 + (float(shift) - 1.0) * first)
     return sigmas
+
+
+def percent_to_sigma(percent, shift):
+    sigma = 1.0 - float(percent)
+    return float(shift) * sigma / (1.0 + (float(shift) - 1.0) * sigma)

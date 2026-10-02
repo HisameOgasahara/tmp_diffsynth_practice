@@ -12,11 +12,13 @@
 | `text_encoder.py` | Qwen 기반 text encoder |
 | `vae.py` | latent와 이미지 변환 |
 | `ops.py` | attention 등 공통 연산 |
-| `runtime.py` | 모델 로딩, conditioning, 생성 sampler 선택, decode 연결 |
+| `runtime.py` | 모델 로딩, conditioning, 초기 latent·예측 함수 준비, 진행률·decode 연결 |
+| `sampling/runner.py` | sampler 선택·옵션 검사, schedule·추가 noise·RF 보정 준비, 실행과 예측 호출 수 계산 |
 | `sampling/model_prediction.py` | DiT 호출, CFG, velocity·denoised 변환 |
 | `sampling/schedules.py` | Z-Image schedule과 RF 시작 sigma 보정 |
 | `sampling/noise.py` | 추가 정규 노이즈와 Brownian noise |
 | `sampling/euler.py`, `heun.py`, `dpmpp.py`, `er_sde.py` | sampler별 갱신식과 예측 이력 |
+| `sampling/exp_heun.py`, `sa_solver.py`, `res_multistep.py`, `gradient_estimation.py` | 추가 5종의 갱신식과 예측·보정 |
 | `lora.py` | [LoRA 가중치 합산](lora.md) |
 | `prompt_weights.py` | [토큰 가중치 해석](prompt_weights.md) |
 | `model_cache.py` | [모델 보관과 장치 이동](model_cache.md) |
@@ -26,7 +28,8 @@
 
 ```text
 모델·tokenizer 준비 → prompt encoding → Anima conditioning
-→ 초기 noise → schedule → 선택 sampler·DiT 예측·CFG → VAE decode
+→ 초기 noise → sampling/runner의 schedule·옵션·noise 준비
+→ 선택 sampler·DiT 예측·CFG → VAE decode
 ```
 
 ## DiffSynth와의 대응
@@ -41,7 +44,7 @@
 | `sampling/euler.py` latent 갱신 | FlowMatchScheduler.step |
 | `decode_image` | VAE와 pipeline의 이미지 변환 |
 
-공통 schedule은 DiffSynth의 Z-Image 방식입니다. 기본 Euler는 `x_next = x + velocity * (sigma_next - sigma)`를 계산하며, 기존 연산 순서를 유지합니다. Heun, RF Euler ancestral, DPM++ 2M, RF DPM++ 2M SDE, RF ER-SDE도 선택할 수 있습니다. 세부 설정과 구현 출처는 [생성 샘플러](sampling.md)를 참고하세요.
+공통 schedule은 DiffSynth의 Z-Image 방식입니다. 기본 Euler는 `x_next = x + velocity * (sigma_next - sigma)`를 계산하며, 기존 연산 순서를 유지합니다. 생성 샘플러 11종의 설정과 구현 출처는 [생성 샘플러](sampling.md)를 참고하세요.
 
 DiffSynth는 schedule과 기본 갱신을 `FlowMatchScheduler`에 함께 둡니다. 이 저장소는 여러 solver를 비교할 수 있도록 두 책임을 분리했습니다.
 

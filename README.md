@@ -28,7 +28,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 
 | 상태 | 기능 | 계획 |
 |---|---|---|
-| 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, 생성 sampler 6종, VAE 디코딩 | [샘플러](docs/sampling.md) · [런타임 구조](docs/runtime_modularization.md) |
+| 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, 생성 sampler 11종, VAE 디코딩 | [샘플러](docs/sampling.md) · [런타임 구조](docs/runtime_modularization.md) |
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 | — |
 | 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 | [학습 기능](docs/runtime_modularization.md#학습-기능-계획) |
 
@@ -62,7 +62,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 ## 사용 안내
 
 - [노트북 사용](docs/notebook_usage.md): 최초 실행, 설정 변경, 반복 생성
-- [생성 샘플러](docs/sampling.md): Euler, Heun, Euler ancestral RF, DPM++ 2M·2M SDE, ER-SDE
+- [생성 샘플러](docs/sampling.md): Euler·Heun·ancestral, DPM++ 2M·2M SDE, ER-SDE, exp-Heun x0·SDE, SA Solver, RES multistep, gradient estimation
 - [LoRA](docs/lora.md): 파일 준비, 지원 형식, 가중치 합산
 - [토큰 가중치](docs/prompt_weights.md): 괄호 문법과 conditioning 처리
 - [모델 캐시](docs/model_cache.md): CPU 보관, GPU 이동, 교체와 초기화

@@ -12,6 +12,11 @@
 | `dpmpp_2m` | ComfyUI 기본 2M 갱신식, 이전 denoised 예측 재사용 | N |
 | `dpmpp_2m_sde` | RF logSNR 기반 2M SDE midpoint, Brownian noise | N |
 | `er_sde` | RF ER-SDE, 최대 3단계 이력과 200점 수치 적분 | N |
+| `exp_heun_2_x0` | RF logSNR·x0 기반 지수 Heun, phi2 보정 | 2N−1 |
+| `exp_heun_2_x0_sde` | 지수 Heun의 확률적 갱신, 독립 정규 노이즈 | 2N−1 |
+| `sa_solver` | RF Stochastic Adams, 기본 predictor 3·corrector 4 | N |
+| `res_multistep` | 결정적 RES 2차 다단계 갱신 | N |
+| `gradient_estimation` | 이전 속도의 차이로 Euler 보정, 기본 gamma 2 | N |
 
 CFG가 1이면 예측 함수당 DiT를 한 번 호출하고, 그 외에는 positive·negative 조건으로 두 번 호출합니다. 모든 샘플러는 마지막 sigma=0 구간을 처리합니다. Heun은 마지막 구간에서 Euler를 사용합니다.
 
@@ -19,10 +24,12 @@ CFG가 1이면 예측 함수당 DiT를 한 번 호출하고, 그 외에는 posit
 
 | 설정 | 적용 대상 | 범위와 의미 |
 |---|---|---|
-| `ETA` | `euler_ancestral`, `dpmpp_2m_sde` | 0~1, 기본 1. 0이면 해당 방식의 결정적 갱신 사용 |
-| `S_NOISE` | `euler_ancestral`, `dpmpp_2m_sde`, `er_sde` | 0 이상, 기본 1. 추가 노이즈 크기 |
+| `ETA` | `euler_ancestral`, `dpmpp_2m_sde`, `exp_heun_2_x0_sde`, `sa_solver` | 0~1, 기본 1. 0이면 해당 방식의 결정적 갱신 사용 |
+| `S_NOISE` | `euler_ancestral`, `dpmpp_2m_sde`, `er_sde`, `exp_heun_2_x0_sde`, `sa_solver` | 0 이상, 기본 1. 추가 노이즈 크기 |
 
 `S_NOISE=0`은 노이즈 추가를 끕니다. `ETA`가 양수인 상태에서는 노이즈를 제거해도 결정적 Euler나 DPM++ 2M과 같은 결과가 되지는 않습니다. ER-SDE에는 `ETA`를 적용하지 않습니다.
+
+SA Solver는 ComfyUI 기본값처럼 `percent_to_sigma(0.2)`부터 `percent_to_sigma(0.8)`까지 노이즈를 적용합니다. `ETA`는 이 구간의 tau 값입니다. PECE·CFG++ 변형은 포함하지 않습니다. exp-Heun 두 방식은 ComfyUI의 SEEDS-2 `r=1`, `solver_type="phi_2"` 경로를 사용합니다.
 
 초기 노이즈와 추가 노이즈는 생성 seed에서 각각 독립적으로 준비합니다. 고정 seed로 비교하려면 `RANDOM_SEED`를 끕니다. 같은 실행 환경·설정에서는 반복 결과를 재현할 수 있으나, ComfyUI와 추가 노이즈의 생성 장치·정밀도가 달라 이미지가 완전히 같아지는 것은 보장하지 않습니다.
 
@@ -38,7 +45,7 @@ schedule은 기존 Z-Image 방식으로 고정합니다. `SHIFT`·`DENOISE`·ste
 
 Anima의 velocity에 CFG를 적용한 뒤 `denoised = x - sigma * velocity`로 변환합니다. Euler·Heun은 velocity를 직접 사용합니다. 신규 denoised 기반 샘플러는 FP32로 갱신식을 계산하고 다음 DiT 평가 전에 원래 latent dtype으로 복원합니다.
 
-`dpmpp_2m`은 ComfyUI 기본 구현의 `-log(sigma)` 시간축을 사용합니다. `dpmpp_2m_sde`와 `er_sde`는 RF용 logSNR 좌표를 사용하며, sigma=1에서 생기는 특이점을 피하도록 ComfyUI와 같은 `percent_to_sigma(1e-4)` 방식으로 시작 sigma를 보정합니다. 따라서 이 두 방식은 시작 sigma가 다른 방식과 미세하게 다릅니다.
+`dpmpp_2m`과 `res_multistep`은 ComfyUI 기본 구현의 `-log(sigma)` 시간축을 사용합니다. `dpmpp_2m_sde`, `er_sde`, exp-Heun 두 방식과 `sa_solver`는 RF용 logSNR 좌표를 사용하며, sigma=1에서 생기는 특이점을 피하도록 ComfyUI와 같은 `percent_to_sigma(1e-4)` 방식으로 시작 sigma를 보정합니다.
 
 비교할 때 모델·LoRA·프롬프트·seed·schedule 설정을 고정합니다. 같은 steps에서의 결과와 같은 예측 호출 수 또는 생성 시간에서의 결과를 구분합니다. 수치 적분 차수가 높아도 이미지 품질이 항상 높아지는 것은 아닙니다.
 
@@ -58,11 +65,15 @@ latents = sample_latents(
 
 | 모듈 | 책임 |
 |---|---|
-| `runtime.py` | 초기 latent, sampler 선택, 진행률·profiler 연결 |
+| `runtime.py` | 초기 latent·ModelPrediction 준비, 진행률·profiler 연결 |
+| `sampling/runner.py` | sampler 선택·옵션 검사, schedule·추가 noise·RF 보정 준비, 실행과 예측 호출 수 계산 |
 | `sampling/model_prediction.py` | DiT·CFG·denoised 변환 |
 | `sampling/schedules.py` | sigma 목록과 RF 시작점 보정 |
 | `sampling/noise.py` | seed 기반 정규·Brownian noise |
 | `sampling/euler.py`, `heun.py`, `dpmpp.py`, `er_sde.py` | 방식별 갱신과 예측 이력 |
+| `sampling/exp_heun.py`, `sa_solver.py`, `res_multistep.py`, `gradient_estimation.py` | 추가 5종의 갱신식·중간 예측·계수와 이력 |
+
+기존 비교 노트북 `tmp_anima_sampler_compare_colab.ipynb`에서 11종을 선택할 수 있습니다. 같은 스텝 수와 비슷한 예측 호출 수의 실험을 지원하며, 호출 수는 `runner.expected_evaluations()`와 `runner.steps_for_evaluations()`로 계산합니다. 목표가 30회이면 Heun·exp-Heun은 15스텝·29회, 나머지는 30스텝·30회입니다.
 
 LoRA 가중치는 생성 전에 기존 방식으로 적용합니다. 학습 경로는 생성 샘플러를 호출하지 않습니다.
 

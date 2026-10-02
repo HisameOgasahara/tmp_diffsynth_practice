@@ -3,6 +3,8 @@
 from pathlib import Path
 import ast
 from functools import partial
+import math
+from typing import Callable, Union
 import sys
 from types import SimpleNamespace
 import unittest
@@ -16,10 +18,13 @@ sys.path.insert(0, str(ROOT / "src"))
 from anima_core.runtime import sample_euler, sample_latents
 from anima_core.logging_utils import configure_logging
 from anima_core.sampling import SAMPLERS as SAMPLER_FUNCTIONS
+from anima_core.sampling.runner import expected_evaluations, steps_for_evaluations
+from anima_core.sampling.model_prediction import ModelPrediction
+from anima_core.sampling.schedules import create_sigmas, offset_first_sigma
 from anima_core.sampling.noise import create_brownian_noise_sampler, create_noise_sampler
 
 
-SAMPLERS = ("euler", "heun", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "er_sde")
+SAMPLERS = tuple(SAMPLER_FUNCTIONS)
 
 
 class AnalyticDiT(nn.Module):
@@ -127,7 +132,7 @@ class SamplingTests(unittest.TestCase):
                     self.assertTrue(torch.equal(actual, repeated))
 
     def test_stochastic_samplers_reproduce_with_partial_denoise(self):
-        for sampler in ("euler_ancestral", "dpmpp_2m_sde", "er_sde"):
+        for sampler in ("euler_ancestral", "dpmpp_2m_sde", "er_sde", "exp_heun_2_x0_sde", "sa_solver"):
             with self.subTest(sampler=sampler):
                 actual = sample_latents(AnalyticDiT(), sampler=sampler, **self.options)
                 repeated = sample_latents(AnalyticDiT(), sampler=sampler, **self.options)
@@ -171,6 +176,42 @@ class SamplingTests(unittest.TestCase):
                     self.assertTrue(torch.isfinite(actual).all())
                     self.assertTrue(all(t.dtype == dtype for t in model.timesteps))
 
+    def test_runner_preserves_existing_sampling_results(self):
+        for sampler in ("euler", "heun", "euler_ancestral", "dpmpp_2m", "dpmpp_2m_sde", "er_sde"):
+            for dtype in (torch.float32, torch.float16):
+                with self.subTest(sampler=sampler, dtype=dtype):
+                    options = dict(self.options, dtype=dtype, denoise=1.0)
+                    initial = torch.randn((1, 16, 2, 3), dtype=dtype,
+                                          generator=torch.Generator("cpu").manual_seed(options["seed"]))
+                    sigmas = create_sigmas(options["steps"], options["denoise"], options["shift"])
+                    sampler_options = {}
+                    if sampler in {"euler_ancestral", "er_sde"}:
+                        sampler_options.update(s_noise=1.0, noise_sampler=create_noise_sampler(initial, options["seed"]))
+                    if sampler == "euler_ancestral":
+                        sampler_options["eta"] = 1.0
+                    if sampler == "dpmpp_2m_sde":
+                        sampler_options.update(eta=1.0, s_noise=1.0,
+                                               noise_sampler=create_brownian_noise_sampler(initial, sigmas, options["seed"]))
+                    if sampler in {"dpmpp_2m_sde", "er_sde"}:
+                        sigmas = offset_first_sigma(sigmas, options["shift"])
+                    prediction = ModelPrediction(AnalyticDiT(), options["positive"],
+                                                 options["negative"], options["cfg_scale"])
+                    expected = SAMPLER_FUNCTIONS[sampler](prediction, initial, sigmas, **sampler_options)
+                    actual = sample_latents(AnalyticDiT(), sampler=sampler, **options)
+                    self.assertTrue(torch.equal(actual, expected))
+
+    def test_evaluation_budget_matches_execution(self):
+        for sampler in SAMPLERS:
+            for target in (1, 10, 30, 31):
+                with self.subTest(sampler=sampler, target=target):
+                    steps = steps_for_evaluations(sampler, target)
+                    planned = expected_evaluations(sampler, steps)
+                    self.assertLessEqual(planned, target)
+                    self.assertLessEqual(target - planned, 1)
+                    model = AnalyticDiT()
+                    sample_latents(model, sampler=sampler, **dict(self.options, steps=steps))
+                    self.assertEqual(len(model.contexts), planned * 2)
+
     def test_reject_invalid_sampling_options_before_model_call(self):
         invalid = {"sampler": ["unknown"], "steps": [0, -1, 1.5, True],
                    "denoise": [0, -0.1, 1.1, float("nan")],
@@ -190,15 +231,27 @@ class SamplingTests(unittest.TestCase):
         source_path = ROOT.parent / "ComfyUI/comfy/k_diffusion/sampling.py"
         if not source_path.exists():
             self.skipTest("ComfyUI 참고 checkout이 없습니다.")
-        names = {"sample_euler_ancestral_RF", "sample_dpmpp_2m", "sample_dpmpp_2m_sde", "sample_er_sde"}
+        names = {"sample_euler_ancestral_RF", "sample_dpmpp_2m", "sample_dpmpp_2m_sde", "sample_er_sde", "sample_seeds_2", "sample_exp_heun_2_x0",
+                 "sample_exp_heun_2_x0_sde", "sample_sa_solver", "res_multistep",
+                 "sample_res_multistep", "sample_gradient_estimation",
+                 "get_ancestral_step", "ei_h_phi_1", "ei_h_phi_2", "default_noise_sampler"}
         source_tree = ast.parse(source_path.read_text(encoding="utf-8"))
         source_tree.body = [node for node in source_tree.body
                             if isinstance(node, ast.FunctionDef) and node.name in names]
         namespace = {"torch": torch, "partial": partial,
+                     "to_d": lambda x, sigma, denoised: (x - denoised) / sigma,
+                     "half_log_snr_to_sigma": lambda value, model_sampling: (-value).sigmoid(),
                      "trange": lambda count, **kwargs: range(count),
                      "sigma_to_half_log_snr": lambda sigma, model_sampling: -sigma.logit(),
                      "offset_first_sigma_for_snr": lambda sigmas, model_sampling: sigmas}
         exec(compile(source_tree, str(source_path), "exec"), namespace)
+        helper_path = source_path.with_name("sa_solver.py")
+        helpers = ast.parse(helper_path.read_text(encoding="utf-8"))
+        helpers.body = [node for node in helpers.body if isinstance(node, ast.FunctionDef)]
+        helper_namespace = {"torch": torch, "math": math, "Callable": Callable, "Union": Union}
+        exec(compile(helpers, str(helper_path), "exec"), helper_namespace)
+        namespace["sa_solver"] = SimpleNamespace(**{key: value for key, value in helper_namespace.items()
+                                                   if not key.startswith("__")})
         model_sampling = SimpleNamespace(noise_scale=1.0)
 
         class DenoisedModel:
@@ -214,11 +267,18 @@ class SamplingTests(unittest.TestCase):
         for sampler, source_name in (("euler_ancestral", "sample_euler_ancestral_RF"),
                                      ("dpmpp_2m", "sample_dpmpp_2m"),
                                      ("dpmpp_2m_sde", "sample_dpmpp_2m_sde"),
-                                     ("er_sde", "sample_er_sde")):
+                                     ("er_sde", "sample_er_sde"),
+                                     ("exp_heun_2_x0", "sample_exp_heun_2_x0"),
+                                     ("exp_heun_2_x0_sde", "sample_exp_heun_2_x0_sde"),
+                                     ("sa_solver", "sample_sa_solver"),
+                                     ("res_multistep", "sample_res_multistep"),
+                                     ("gradient_estimation", "sample_gradient_estimation")):
             with self.subTest(sampler=sampler):
-                options = {} if sampler == "dpmpp_2m" else dict(s_noise=0.4, noise_sampler=noise)
-                if sampler in {"euler_ancestral", "dpmpp_2m_sde"}:
+                options = {} if sampler in {"dpmpp_2m", "exp_heun_2_x0", "res_multistep", "gradient_estimation"} else dict(s_noise=0.4, noise_sampler=noise)
+                if sampler in {"euler_ancestral", "dpmpp_2m_sde", "exp_heun_2_x0_sde"}:
                     options["eta"] = 0.7
+                if sampler == "sa_solver":
+                    options["tau_func"] = lambda sigma: 0.7 if 0.3 <= sigma <= 0.7 else 0.0
                 expected = namespace[source_name](DenoisedModel(), initial.clone(), sigmas.clone(), **options)
                 actual = SAMPLER_FUNCTIONS[sampler](DenoisedModel(), initial.clone(), sigmas.clone(), **options)
                 torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-5)

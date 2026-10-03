@@ -1,0 +1,36 @@
+{
+  "prompt": "shirakawa yuina, (@WFS:0.8), blue headgear, platinum blonde hair, yuina eyelashes, 1girl, solo, expressionless, upper body, blue capelet, white uniform shirt, looking away, white pleated skirt, contrapposto, park, morning, blurry, depth of field, sunlight, vibrant colors, wallpaper",
+  "negative_prompt": "worst quality, low quality, score_1, score_2, score_3, head out of frame, jpeg artifacts",
+  "seed": 1113280783077048,
+  "random_seed": true,
+  "steps": 30,
+  "cfg": 4.0,
+  "width": 1216,
+  "height": 832,
+  "denoise": 1.0,
+  "shift": 3.0,
+  "device": "cuda",
+  "dtype": "float16",
+  "lora_path": "/content/drive/MyDrive/2/lora_muon_500.safetensors",
+  "lora_scale": 1.0,
+  "use_token_weights": true,
+  "use_model_cache": true,
+  "logging": {
+    "level": "INFO",
+    "progress": true
+  },
+  "profiler": {
+    "enabled": false,
+    "stages": [
+      "sample_euler"
+    ],
+    "output_dir": "/content/anima_profiles",
+    "wait": 0,
+    "warmup": 1,
+    "active": 3,
+    "record_shapes": false,
+    "profile_memory": false,
+    "with_stack": false,
+    "row_limit": 20
+  }
+}

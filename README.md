@@ -10,8 +10,6 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/feat/muon-optimizer/anima_lora_muon_train_colab.ipynb?forceEdit=true&sandboxMode=true)
 
-Muon 노트북은 기존 LoRA 학습 순서를 유지하며 `configs/anima_lora_muon.toml`을 사용합니다. LoRA A/B 행렬 모두 Muon에 전달하고, 기본 학습률은 탐색 시작값 0.00005입니다. momentum 0.95, Nesterov, Newton–Schulz 5회, `adjust_lr_fn="original"`을 사용합니다. Muon을 지원하는 PyTorch 2.11 이상 CUDA 런타임에서 실행하세요. 4번 셀의 `OPTIMIZER`에서 Muon / AdamW를 선택하며 기본값은 Muon입니다. AdamW를 선택하면 기존 AdamW TOML과 학습 경로를 사용합니다. 기존 AdamW 노트북·설정은 유지됩니다. 학습률은 warmup 종료 이후 검증 loss와 생성 결과를 보고 선택하세요.
-
 Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습하고, 생성·학습 코드를 이 저장소 안에서 완결하는 프로젝트입니다.
 
 | 항목 | 방향 |
@@ -28,7 +26,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | DiT | latent를 2×2 패치로 나눠 28개 블록에서 처리. RoPE 위치 표현, 텍스트 cross-attention, 시간 조건 AdaLN 사용 |
 | 텍스트 조건 | Qwen3-0.6B 출력과 T5 tokenizer의 토큰 ID를 6층 LLMAdapter로 결합해 DiT에 전달 |
 | 생성 | 노이즈 latent에서 RF 속도를 예측해 CFG·선택 sampler로 갱신한 뒤 VAE로 디코딩. 공통 Z-Image schedule 사용 |
-| LoRA 학습 | 데이터·노이즈의 직선 보간과 속도 예측 MSE로 학습. DiT에 LoRA를 적용하고 TE·text adapter는 고정하며, VAE latent·adapter 출력은 사전 캐시 |
+| LoRA 학습 | Muon / AdamW 선택. 데이터·노이즈의 직선 보간과 속도 예측 MSE로 학습. DiT에 LoRA를 적용하고 TE·text adapter는 고정하며, VAE latent·adapter 출력은 사전 캐시 |
 
 ## 현재 구현 상태
 
@@ -36,7 +34,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|---|
 | 구현됨 | Anima 모델 정의 분리, 텍스트 조건 처리, CFG, 생성 sampler 11종, VAE 디코딩 | [샘플러](docs/sampling.md) · [런타임 구조](docs/runtime_modularization.md) |
 | 구현됨 | 기존 LoRA 가중치 적용, 토큰 가중치, 모델 캐시, 로그·프로파일러 | — |
-| 구현됨 | LoRA 학습: TE·text adapter 학습 제외, text adapter 출력 사전 캐시 | [학습 기능](docs/runtime_modularization.md#학습-기능-계획) |
+| 구현됨 | LoRA 학습: Muon / AdamW 선택, TE·text adapter 학습 제외, text adapter 출력 사전 캐시 | [학습 기능](docs/runtime_modularization.md#학습-기능-계획) |
 
 ## 학습 확인 환경
 
@@ -47,7 +45,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | PyTorch CUDA / cuDNN | 12.8 / 9.19.0 |
 | NVIDIA 드라이버 | 580.82.07 |
 | GPU | Tesla T4, VRAM 15.0 GB |
-| 학습 설정 | 해상도 512, batch 4, repeat 6, bf16 · [TOML](configs/anima_lora.toml) |
+| 학습 설정 | Muon, 해상도 512, batch 4, repeat 6, bf16 · [실행 TOML](assets/examples/변화과정/v2_muon/training.toml) |
 | 시스템 RAM (약 296스텝) | 3.2 / 12.7 GB |
 | GPU RAM (약 296스텝) | 7.3 / 15.0 GB |
 
@@ -55,15 +53,22 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 
 ## 생성 예시
 
-![Anima LoRA 생성 예시](assets/examples/anima_lora.png)
+![Anima Muon LoRA 500스텝 생성 예시](assets/examples/변화과정/v2_muon/다운로드_500_fin_wfs08.png)
 
 | 항목 | 값 |
 |---|---|
 | 학습 캐릭터 | [시라카와 유이나](https://heaven-burns-red.com/character/30g/shirakawa-yuina/) |
-| LoRA | 400스텝, 적용 강도 1.0 · [가중치 저장소](https://huggingface.co/Kamome33/anima_lora_test/tree/main) |
+| LoRA | Muon 500스텝, 적용 강도 1.0 |
 | 생성 설정 | 1216×832, 30스텝, CFG 4.0, shift 3.0, denoise 1.0, fp16 |
 | 시드 | 무작위 (`random_seed = true`) |
-| 프롬프트·설정 원본 | [anima_minimal_config.json](assets/examples/anima_minimal_config.json) |
+| 프롬프트·생성 설정 | [다운로드_500_fin_wfs08.json](assets/examples/변화과정/v2_muon/다운로드_500_fin_wfs08.json) |
+| 학습 설정 원본 | [training.toml](assets/examples/변화과정/v2_muon/training.toml) |
+| 학습 데이터 | 해상도 512, batch 4, repeat 6, caption dropout 0.1 |
+| LoRA 설정 | DiT, rank 32, alpha 128 |
+| 옵티마이저 | Muon, 학습률 0.00005, momentum 0.95, Nesterov, Newton–Schulz 5회, `adjust_lr_fn="original"`, weight decay 0.01 |
+| 학습 스케줄 | cosine, warmup 5%, 최대 2,400스텝, gradient accumulation 1, 학습 시드 42 |
+| 학습 런타임 | bf16, gradient checkpointing 사용, 50스텝마다 저장 |
+| 생성 변화과정 | [v2_muon](assets/examples/변화과정/v2_muon) |
 
 ## 사용 안내
 

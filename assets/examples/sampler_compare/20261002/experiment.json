@@ -1,0 +1,149 @@
+{
+  "config": {
+    "prompt": "shirakawa yuina, @WFS, blue headgear, platinum blonde hair, yuina eyelashes, blue capelet, 1girl, solo, lupper body, upper body, solo, expressionless, looking at viewer, blue capelet, , white uniform shirt, white pleated skirt, white pantyhose, sitting, cafe, blurry, depth of field, sunlight, vibrant colors, wallpaper",
+    "negative_prompt": "worst quality, low quality, score_1, score_2, score_3, blurry, jpeg artifacts",
+    "seed": 1113280783077048,
+    "random_seed": false,
+    "steps": 30,
+    "cfg": 4.0,
+    "width": 1216,
+    "height": 832,
+    "denoise": 1.0,
+    "shift": 3.0,
+    "device": "cuda",
+    "dtype": "float16",
+    "lora_path": "/content/drive/MyDrive/1/self_made/lora_450.safetensors",
+    "lora_scale": 1.0,
+    "use_token_weights": true,
+    "use_model_cache": false,
+    "logging": {
+      "level": "WARNING",
+      "progress": true
+    },
+    "profiler": {
+      "enabled": false
+    }
+  },
+  "cases": [
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_euler",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "euler",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_heun",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "heun",
+      "steps": 30,
+      "expected_evaluations": 59
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_euler_ancestral",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "euler_ancestral",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_dpmpp_2m",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "dpmpp_2m",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_dpmpp_2m_sde",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "dpmpp_2m_sde",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_er_sde",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "er_sde",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_exp_heun_2_x0",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "exp_heun_2_x0",
+      "steps": 30,
+      "expected_evaluations": 59
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_exp_heun_2_x0_sde",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "exp_heun_2_x0_sde",
+      "steps": 30,
+      "expected_evaluations": 59
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_sa_solver",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "sa_solver",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_res_multistep",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "res_multistep",
+      "steps": 30,
+      "expected_evaluations": 30
+    },
+    {
+      "id": "same_steps_seed-1113280783077048_target-30_gradient_estimation",
+      "mode": "same_steps",
+      "seed": 1113280783077048,
+      "target": 30,
+      "sampler": "gradient_estimation",
+      "steps": 30,
+      "expected_evaluations": 30
+    }
+  ],
+  "source": {
+    "root": "/content/tmp_diffsynth_sampler_compare",
+    "commit": "ccf94b3619ac11938edf77bbcae62217675ff654",
+    "working_tree": "?? src/anima_core/__pycache__/\n?? src/anima_core/sampling/__pycache__/"
+  },
+  "eta": 1.0,
+  "s_noise": 1.0,
+  "warmup": true,
+  "baseline_config": "/content/tmp_diffsynth_sampler_compare/assets/examples/anima_minimal_config.json",
+  "environment": {
+    "python": "3.13.15",
+    "torch": "2.11.0+cu130",
+    "cuda": "13.0",
+    "gpu": "Tesla T4",
+    "torchsde": "0.2.6"
+  },
+  "weights": {
+    "dit": "/root/.cache/huggingface/hub/models--circlestone-labs--Anima/snapshots/f973fc41ec7545364ac9776c2440285f43ff2a30/split_files/diffusion_models/anima-base-v1.0.safetensors",
+    "text_encoder": "/root/.cache/huggingface/hub/models--circlestone-labs--Anima/snapshots/f973fc41ec7545364ac9776c2440285f43ff2a30/split_files/text_encoders/qwen_3_06b_base.safetensors",
+    "vae": "/root/.cache/huggingface/hub/models--circlestone-labs--Anima/snapshots/f973fc41ec7545364ac9776c2440285f43ff2a30/split_files/vae/qwen_image_vae.safetensors"
+  }
+}

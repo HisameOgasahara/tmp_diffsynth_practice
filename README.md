@@ -59,6 +59,7 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|
 | 학습 캐릭터 | [시라카와 유이나](https://heaven-burns-red.com/character/30g/shirakawa-yuina/) |
 | LoRA | Muon 500스텝, 적용 강도 1.0 |
+| 웨이트 | [v2_muon](https://huggingface.co/Kamome33/anima_lora_test/tree/main/v2_muon) |
 | 생성 설정 | 1216×832, 30스텝, CFG 4.0, shift 3.0, denoise 1.0, fp16 |
 | 시드 | 무작위 (`random_seed = true`) |
 | 프롬프트·생성 설정 | [다운로드_500_fin_wfs08.json](assets/examples/변화과정/v2_muon/다운로드_500_fin_wfs08.json) |

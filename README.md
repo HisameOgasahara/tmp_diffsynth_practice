@@ -6,10 +6,6 @@
 **LoRA 훈련**  
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/main/anima_lora_train_colab.ipynb?forceEdit=true&sandboxMode=true)
 
-**Muon LoRA 훈련 · GPU Colab**
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HisameOgasahara/tmp_diffsynth_practive/blob/feat/muon-optimizer/anima_lora_muon_train_colab.ipynb?forceEdit=true&sandboxMode=true)
-
 Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습하고, 생성·학습 코드를 이 저장소 안에서 완결하는 프로젝트입니다.
 
 | 항목 | 방향 |
@@ -52,6 +48,23 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 전체 Python 패키지 버전: [requirements-freeze.txt](docs/requirements-freeze.txt)
 
 ## 생성 예시
+
+### AdamW
+
+![Anima AdamW LoRA 400스텝 생성 예시](assets/examples/anima_lora.png)
+
+| 항목 | 값 |
+|---|---|
+| 학습 캐릭터 | [시라카와 유이나](https://heaven-burns-red.com/character/30g/shirakawa-yuina/) |
+| LoRA | AdamW 400스텝, 적용 강도 1.0 |
+| 웨이트 | [v1 AdamW](https://huggingface.co/Kamome33/anima_lora_test/tree/main) |
+| 생성 설정 | 1216×832, 30스텝, CFG 4.0, shift 3.0, denoise 1.0, fp16 |
+| 시드 | 무작위 (`random_seed = true`) |
+| 프롬프트·생성 설정 | [anima_minimal_config.json](assets/examples/anima_minimal_config.json) |
+| 학습 설정 원본 | [training.toml](assets/examples/변화과정/v1/training.toml) |
+| 생성 변화과정 | [v1](assets/examples/변화과정/v1) |
+
+### Muon
 
 ![Anima Muon LoRA 500스텝 생성 예시](assets/examples/변화과정/v2_muon/다운로드_500_fin_wfs08.png)
 

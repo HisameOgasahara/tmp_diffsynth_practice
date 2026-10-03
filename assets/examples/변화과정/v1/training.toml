@@ -1,0 +1,31 @@
+[dataset]
+resolution = 512
+batch_size = 4
+repeat = 6
+caption_dropout_rate = 0.1
+
+[lora]
+base_model = "dit"
+rank = 32
+alpha = 128
+target_modules = ""
+
+[training]
+optimizer = "AdamW"
+learning_rate = 2e-05
+weight_decay = 0.01
+lr_scheduler = "cosine"
+warmup_ratio = 0.05
+max_steps = 2400
+gradient_accumulation_steps = 1
+seed = 42
+max_grad_norm = 1.0
+sigmoid_scale = 1.0
+sigmoid_bias = 0.0
+
+[runtime]
+mixed_precision = "bf16"
+use_gradient_checkpointing = true
+
+[checkpoint]
+save_steps = 50

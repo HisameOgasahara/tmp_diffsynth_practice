@@ -63,11 +63,6 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 | 시드 | 무작위 (`random_seed = true`) |
 | 프롬프트·생성 설정 | [다운로드_500_fin_wfs08.json](assets/examples/변화과정/v2_muon/다운로드_500_fin_wfs08.json) |
 | 학습 설정 원본 | [training.toml](assets/examples/변화과정/v2_muon/training.toml) |
-| 학습 데이터 | 해상도 512, batch 4, repeat 6, caption dropout 0.1 |
-| LoRA 설정 | DiT, rank 32, alpha 128 |
-| 옵티마이저 | Muon, 학습률 0.00005, momentum 0.95, Nesterov, Newton–Schulz 5회, `adjust_lr_fn="original"`, weight decay 0.01 |
-| 학습 스케줄 | cosine, warmup 5%, 최대 2,400스텝, gradient accumulation 1, 학습 시드 42 |
-| 학습 런타임 | bf16, gradient checkpointing 사용, 50스텝마다 저장 |
 | 생성 변화과정 | [v2_muon](assets/examples/변화과정/v2_muon) |
 
 ## 사용 안내

@@ -1,6 +1,7 @@
 [dataset]
-# EXIF 방향 보정 후 RGB로 변환하고 중앙 정사각형 crop을 적용합니다.
-resolution = 512
+# 원본 비율을 유지하며 면적 상한으로 축소합니다. 각 변은 16의 배수입니다.
+# 262144 = 512 × 512. 작은 원본은 확대하지 않습니다.
+max_pixels = 262144
 batch_size = 4
 repeat = 6
 caption_dropout_rate = 0.1

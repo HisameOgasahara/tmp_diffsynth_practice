@@ -27,7 +27,7 @@ def write_config(path, config):
 
 def validate_config(config):
     fields = {
-        "dataset": {"resolution", "batch_size", "repeat", "caption_dropout_rate"},
+        "dataset": {"max_pixels", "batch_size", "repeat", "caption_dropout_rate"},
         "lora": {"base_model", "rank", "alpha", "target_modules"},
         "training": {"optimizer", "learning_rate", "weight_decay", "lr_scheduler",
                      "warmup_ratio", "max_steps", "gradient_accumulation_steps", "seed",
@@ -43,15 +43,15 @@ def validate_config(config):
         if set(config[section]) != keys:
             raise ValueError(f"{section} 설정 항목은 {sorted(keys)}이어야 합니다.")
     for section, key in (
-        ("dataset", "resolution"), ("dataset", "batch_size"), ("dataset", "repeat"),
+        ("dataset", "max_pixels"), ("dataset", "batch_size"), ("dataset", "repeat"),
         ("lora", "rank"), ("training", "max_steps"),
         ("training", "gradient_accumulation_steps"), ("checkpoint", "save_steps"),
     ):
         value = config[section][key]
         if type(value) is not int or value < 1:
             raise ValueError(f"{section}.{key}는 양의 정수여야 합니다.")
-    if config["dataset"]["resolution"] % 16:
-        raise ValueError("resolution은 16의 배수여야 합니다.")
+    if config["dataset"]["max_pixels"] < 256:
+        raise ValueError("max_pixels는 256 이상이어야 합니다. 이전 resolution 설정은 max_pixels로 바꾸세요.")
     for section, key, minimum, maximum in (
         ("dataset", "caption_dropout_rate", 0, 1),
         ("training", "warmup_ratio", 0, 1),

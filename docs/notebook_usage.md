@@ -39,3 +39,13 @@ Colab에서 `anima_minimal_colab.ipynb`을 열고 아래 순서로 실행합니�
 - [토큰 가중치](prompt_weights.md)
 - [모델 캐시](model_cache.md)
 - [로그와 프로파일러](diagnostics.md)
+
+## LoRA 학습 전처리 확인
+
+`anima_lora_train_colab.ipynb`은 1 저장소 준비 → 2 경로 설정 → 3 TOML → 4 이미지 전처리·미리보기 → 5 모델 다운로드 → 6 GPU 캐시 → 7 선택 검증 학습 → 8 TensorBoard → 9 본 학습 → 10 결과 저장 순서로 실행합니다.
+
+2번 셀의 `PREPROCESS_DIR`에는 원본 데이터셋 밖의 폴더를 지정합니다. 4번 셀은 PNG와 TXT를 별도 하위 폴더에 저장하고 `PREPROCESSED_PATH`를 출력합니다. `PREVIEW_COUNT`는 기본 6이며, 왼쪽 원본과 오른쪽 전처리 결과를 나란히 보여줍니다. 원본 크기와 결과 크기는 `preprocessing.json`에도 저장됩니다.
+
+기본 면적 상한은 `dataset.max_pixels = 262144`입니다. 가로·세로 비율을 유지해 축소한 뒤 각 변을 16의 배수로 맞추므로 이미지마다 크기가 다릅니다. 작은 원본은 확대하지 않습니다. 학습 시 같은 크기끼리 묶고 남는 이미지는 작은 배치로 사용합니다. `batch_size`는 최대 배치 크기입니다.
+
+데이터셋이나 `max_pixels`를 변경하면 4번 전처리와 6번 캐시 셀을 다시 실행합니다. 새 전처리로 학습할 때는 새 학습 결과 폴더를 사용하고 `RESUME_FROM`을 비웁니다. 기존 `resolution` 설정을 사용하는 TOML은 `max_pixels`로 바꿔야 합니다. 원인과 실제 크롭 사례는 [전처리 연구노트](notes/preprocessing-framing.md)를 참고하세요.

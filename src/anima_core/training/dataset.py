@@ -11,29 +11,15 @@ from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
 
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-CACHE_VERSION = 3
+from .preprocessing import discover_pairs, preprocess_images
 
 
-def discover_pairs(dataset_dir):
-    root = Path(dataset_dir).expanduser().resolve()
-    pairs = []
-    for image_path in sorted(root.rglob("*")):
-        if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
-            continue
-        caption_path = image_path.with_suffix(".txt")
-        if not caption_path.is_file():
-            raise ValueError(f"동명 TXT 캡션이 없습니다: {image_path}")
-        pairs.append({"image": str(image_path), "caption": caption_path.read_text(encoding="utf-8-sig").strip()})
-    if not pairs:
-        raise ValueError(f"학습 이미지가 없습니다: {root}")
-    return pairs
+CACHE_VERSION = 4
 
 
-def read_image(path, resolution):
+def read_image(path):
     with Image.open(path) as image:
         image = ImageOps.exif_transpose(image).convert("RGB")
-        image = ImageOps.fit(image, (resolution, resolution), method=Image.Resampling.LANCZOS)
         pixels = np.asarray(image, dtype=np.float32).copy()
     return torch.from_numpy(pixels).permute(2, 0, 1).unsqueeze(1) / 127.5 - 1
 
@@ -44,11 +30,17 @@ def release_cuda_memory():
         torch.cuda.empty_cache()
 
 
-def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda"):
+def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda", preprocessed_dir=None):
     from ..runtime import load_vae, load_text_encoder, load_tokenizers, encode_prompt
     from .config import resolve_dtype
 
-    pairs = discover_pairs(dataset_dir)
+    # 직접 호출해도 노트북과 동일한 PNG 전처리를 거칩니다.
+    output_root = Path(preprocessed_dir).resolve().parent if preprocessed_dir else Path(cache_dir) / "preprocessed"
+    processed_path = preprocess_images(config, dataset_dir, output_root)
+    if preprocessed_dir and processed_path != Path(preprocessed_dir).resolve():
+        raise ValueError("전처리 설정 또는 원본이 바뀌었습니다. 전처리 셀을 다시 실행하세요.")
+    pairs = discover_pairs(processed_path)
+    image_manifest = json.loads((processed_path / "preprocessing.json").read_text(encoding="utf-8"))
     dtype = resolve_dtype(config, device)
     signatures = []
     for pair in pairs:
@@ -61,8 +53,9 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda"):
         model_signatures[name] = {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     identity = {
         "version": CACHE_VERSION, "pairs": signatures, "weights": model_signatures,
-        "resolution": config["dataset"]["resolution"], "text_dtype": str(dtype),
-        "preprocess": "exif_rgb_center_crop", "max_sequence_length": 512,
+        "max_pixels": config["dataset"]["max_pixels"], "text_dtype": str(dtype),
+        "preprocessing_fingerprint": image_manifest["fingerprint"],
+        "preprocess": "exif_rgb_dynamic_center_crop_bilinear", "max_sequence_length": 512,
     }
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     cache_path = Path(cache_dir).expanduser().resolve() / fingerprint
@@ -72,16 +65,17 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda"):
         print(f"기존 캐시 사용: {len(dataset)}개, {cache_path}")
         return cache_path
     cache_path.mkdir(parents=True, exist_ok=True)
-    records = [{"file": f"{index:07d}.safetensors", "image": pair["image"]}
+    records = [{"file": f"{index:07d}.safetensors", "image": pair["image"],
+                "image_size": image_manifest["records"][index]["size"]}
                for index, pair in enumerate(pairs)]
-    print(f"이미지 {len(pairs)}개: 중앙 정사각형 crop → {identity['resolution']} 해상도")
+    print(f"전처리 PNG {len(pairs)}개 → VAE latent 캐시")
 
     # VAE는 FP32로 계산하여 FP16 전처리의 overflow를 피합니다.
     vae = load_vae(weights["vae"], device=device, dtype=torch.float32)
     try:
         with torch.no_grad():
             for pair, record in tqdm(list(zip(pairs, records)), desc="VAE latent 캐시"):
-                image = read_image(pair["image"], identity["resolution"])
+                image = read_image(pair["image"])
                 latent = vae.encode(image.unsqueeze(0), device=device)[0].cpu().contiguous()
                 if not torch.isfinite(latent).all():
                     raise RuntimeError(f"VAE latent에 비유한 값이 있습니다: {pair['image']}")
@@ -155,6 +149,9 @@ class CachedDataset(Dataset):
             path = (self.cache_path / record["file"]).resolve()
             if not path.is_relative_to(self.cache_path) or not path.is_file():
                 raise ValueError(f"캐시 파일이 없거나 경로가 잘못되었습니다: {record['file']}")
+        self.bucket_keys = [tuple(record["image_size"]) if "image_size" in record else
+                            tuple(load_file(str(self.cache_path / record["file"]))["latent"].shape)
+                            for record in self.records]
         self.empty = load_file(str(self.cache_path / "empty.safetensors"))
         if "crossattn_emb" not in self.empty:
             raise ValueError("이전 학습 캐시에는 adapter 출력이 없습니다. 캐시 준비 단계를 다시 실행하세요.")
@@ -167,31 +164,40 @@ class CachedDataset(Dataset):
 
 
 class SampleStream:
-    """epoch별 shuffle과 cursor를 저장하여 재개 시 같은 다음 샘플을 선택합니다."""
+    """크기별 배치를 섞고 epoch·cursor로 동일한 다음 배치를 복원합니다."""
 
-    def __init__(self, dataset, repeat, seed, epoch=0, cursor=0):
+    def __init__(self, dataset, repeat, seed, batch_size, epoch=0, cursor=0):
         self.dataset = dataset
         self.repeat = repeat
         self.seed = seed
+        self.batch_size = batch_size
         self.epoch = epoch
         self.cursor = cursor
         self._set_order()
 
     def _set_order(self):
         generator = torch.Generator().manual_seed(self.seed + self.epoch)
-        self.order = torch.randperm(len(self.dataset) * self.repeat, generator=generator).tolist()
+        buckets = {}
+        for index, key in enumerate(self.dataset.bucket_keys):
+            buckets.setdefault(key, []).extend([index] * self.repeat)
+        batches = []
+        for indices in buckets.values():
+            shuffled = [indices[i] for i in torch.randperm(len(indices), generator=generator).tolist()]
+            batches.extend(shuffled[start:start + self.batch_size]
+                           for start in range(0, len(shuffled), self.batch_size))
+        self.batches = [batches[i] for i in torch.randperm(len(batches), generator=generator).tolist()]
+        self.order = [index for batch in self.batches for index in batch]
 
     def take(self, batch_size):
-        batch = []
-        for _ in range(batch_size):
-            if self.cursor == len(self.order):
-                self.epoch += 1
-                self.cursor = 0
-                self._set_order()
-            index = self.order[self.cursor] % len(self.dataset)
-            batch.append(self.dataset[index])
-            self.cursor += 1
-        return batch
+        if batch_size != self.batch_size:
+            raise ValueError("배치 크기는 SampleStream 생성 시 설정한 값과 같아야 합니다.")
+        if self.cursor == len(self.batches):
+            self.epoch += 1
+            self.cursor = 0
+            self._set_order()
+        indices = self.batches[self.cursor]
+        self.cursor += 1
+        return [self.dataset[index] for index in indices]
 
     def state_dict(self):
         return {"epoch": self.epoch, "cursor": self.cursor}

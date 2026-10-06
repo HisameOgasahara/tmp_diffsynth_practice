@@ -20,7 +20,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from anima_core.lora import fuse_lora
 from anima_core.ops import gradient_checkpoint_forward
 from anima_core.training.config import load_config, write_config
-from anima_core.training.dataset import CachedDataset, discover_pairs, prepare_cache, read_image
+from anima_core.training.dataset import CachedDataset, SampleStream, discover_pairs, prepare_cache, read_image
+from anima_core.training.preprocessing import choose_image_size, preprocess_images, resize_image
 from anima_core.training.flow_matching import FlowMatchingLoss
 from anima_core.training.lora import collect_lora_weights, find_target_modules, inject_lora
 from anima_core.training.trainer import create_scheduler, train_model
@@ -472,7 +473,7 @@ class TrainingTests(unittest.TestCase):
                 return torch.full((*target_input_ids.shape, 4), 7.0)
 
         config = make_config()
-        config["dataset"]["resolution"] = 32
+        config["dataset"]["max_pixels"] = 1024
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             data = root / "data"
@@ -492,10 +493,10 @@ class TrainingTests(unittest.TestCase):
                      torch.arange(512).unsqueeze(0) < 3, torch.arange(512).unsqueeze(0) < 2)):
                 cache = prepare_cache(config, data, root / "cache", weights, "cpu")
                 dataset = CachedDataset(cache)
-                self.assertEqual(dataset[0]["latent"].shape, (16, 1, 4, 4))
+                self.assertEqual(dataset[0]["latent"].shape, (16, 1, 2, 4))
                 self.assertEqual(set(dataset[0]), {"latent", "crossattn_emb"})
                 self.assertEqual(set(dataset.empty), {"crossattn_emb"})
-                self.assertEqual(dataset.manifest["identity"]["version"], 3)
+                self.assertEqual(dataset.manifest["identity"]["version"], 4)
                 for tensors in (dataset[0], dataset.empty):
                     self.assertEqual(tensors["crossattn_emb"].shape, (512, 4))
                     self.assertTrue(torch.all(tensors["crossattn_emb"][:2] == 7))
@@ -554,8 +555,8 @@ class TrainingTests(unittest.TestCase):
                 discover_pairs(path)
             (path / "sample.txt").write_text("테스트 캡션", encoding="utf-8")
             self.assertEqual(discover_pairs(path)[0]["caption"], "테스트 캡션")
-            tensor = read_image(path / "sample.png", 32)
-            self.assertEqual(tensor.shape, (3, 1, 32, 32))
+            tensor = read_image(path / "sample.png")
+            self.assertEqual(tensor.shape, (3, 1, 40, 80))
             self.assertTrue(torch.equal(tensor, torch.ones_like(tensor)))
 
     def test_notebook_has_no_saved_outputs_and_code_compiles(self):
@@ -566,6 +567,87 @@ class TrainingTests(unittest.TestCase):
                 self.assertEqual(cell["outputs"], [])
                 self.assertIsNone(cell["execution_count"])
                 compile("".join(cell["source"]), f"notebook:{cell['id']}", "exec")
+
+    def test_dynamic_resize_preserves_head_and_limits_area(self):
+        image = Image.new("RGB", (64, 128), "white")
+        image.paste("red", (0, 0, 64, 16))
+        processed = resize_image(image, 2048)
+        self.assertEqual(processed.size, (32, 64))
+        self.assertEqual(processed.getpixel((16, 2)), (255, 0, 0))
+        for width, height in ((1176, 2160), (2428, 1368), (684, 743), (64, 32)):
+            target = choose_image_size(width, height, 262144)
+            self.assertTrue(all(side % 16 == 0 for side in target))
+            self.assertLessEqual(target[0] * target[1], 262144)
+            self.assertLessEqual(target[0], width)
+            self.assertLessEqual(target[1], height)
+
+    def test_preprocessed_files_reuse_and_caption_changes(self):
+        config = make_config()
+        config["dataset"]["max_pixels"] = 2048
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "original"
+            source.mkdir()
+            Image.new("RGB", (64, 128), "white").save(source / "image.png")
+            caption = source / "image.txt"
+            caption.write_text("first", encoding="utf-8")
+            before = (source / "image.png").read_bytes()
+            result = preprocess_images(config, source, root / "processed")
+            with Image.open(result / "0000000.png") as image:
+                self.assertEqual(image.size, (32, 64))
+            self.assertEqual((result / "0000000.txt").read_text(), "first")
+            self.assertEqual((source / "image.png").read_bytes(), before)
+            image_time = (result / "0000000.png").stat().st_mtime_ns
+            self.assertEqual(preprocess_images(config, source, root / "processed"), result)
+            self.assertEqual((result / "0000000.png").stat().st_mtime_ns, image_time)
+            caption.write_text("second", encoding="utf-8")
+            changed = preprocess_images(config, source, root / "processed")
+            self.assertNotEqual(changed, result)
+            self.assertEqual((changed / "0000000.txt").read_text(), "second")
+
+    def test_bucket_stream_covers_all_samples_and_resumes(self):
+        class Dataset:
+            bucket_keys = [(32, 64), (64, 32), (32, 64), (80, 16)]
+
+            def __getitem__(self, index):
+                return index
+
+        dataset = Dataset()
+        stream = SampleStream(dataset, repeat=3, seed=42, batch_size=4)
+        observed = []
+        for _ in range(len(stream.batches)):
+            batch = stream.take(4)
+            self.assertEqual(len({dataset.bucket_keys[index] for index in batch}), 1)
+            self.assertLessEqual(len(batch), 4)
+            observed.extend(batch)
+        self.assertEqual(sorted(observed), sorted(list(range(4)) * 3))
+        self.assertTrue(any(len(batch) < 4 for batch in stream.batches))
+        stream.take(4)
+        restored = SampleStream(dataset, repeat=3, seed=42, batch_size=4, **stream.state_dict())
+        for _ in range(10):
+            self.assertEqual(stream.take(4), restored.take(4))
+
+    def test_training_accepts_mixed_image_sizes_and_resumes(self):
+        config = make_config()
+        base = TinyDiT()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset = make_dataset(root / "cache")
+            tensors = dataset[1]
+            tensors["latent"] = torch.ones(4, 1, 2, 4)
+            save_file(tensors, str(dataset.cache_path / dataset.records[1]["file"]))
+            dataset = CachedDataset(dataset.cache_path)
+            full = deepcopy(base)
+            inject_lora(full, config["lora"])
+            train_model(full, config, dataset, root / "full", device="cpu", tensorboard=False)
+            resumed = deepcopy(base)
+            inject_lora(resumed, config["lora"])
+            train_model(resumed, config, dataset, root / "resumed",
+                        resume_from=root / "full/step-0000002", device="cpu", tensorboard=False)
+            expected = load_file(str(root / "full/step-0000004/lora.safetensors"))
+            actual = load_file(str(root / "resumed/step-0000004/lora.safetensors"))
+            for name in expected:
+                torch.testing.assert_close(actual[name], expected[name], rtol=0, atol=0)
 
 
 if __name__ == "__main__":

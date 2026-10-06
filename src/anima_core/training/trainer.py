@@ -61,7 +61,7 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
                                 config, fingerprint, device)
         step, stream_state = state["step"], state["stream"]
         loss_recorder.load_state_dict(state["loss_recorder"])
-    stream = SampleStream(dataset, config["dataset"]["repeat"], training["seed"], **stream_state)
+    stream = SampleStream(dataset, config["dataset"]["repeat"], training["seed"], config["dataset"]["batch_size"], **stream_state)
     loss_fn = FlowMatchingLoss(training)
     writer = None
     if tensorboard:
@@ -73,14 +73,14 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
     accumulation = training["gradient_accumulation_steps"]
     dropout = config["dataset"]["caption_dropout_rate"]
     print(f"학습 가능 파라미터: {sum(p.numel() for p in parameters):,}")
-    print(f"batch={batch_size}, accumulation={accumulation}, 유효 batch={batch_size * accumulation}")
+    print(f"최대 batch={batch_size}, accumulation={accumulation}; 크기별 잔여 배치는 더 작을 수 있습니다.")
     progress = tqdm(total=training["max_steps"], initial=step, desc="LoRA optimizer 업데이트")
     try:
         while step < training["max_steps"]:
             started = time.monotonic()
             loss_epoch = stream.epoch
-            loss_step = stream.cursor // (batch_size * accumulation)
-            if stream.cursor == len(stream.order):
+            loss_step = stream.cursor // accumulation
+            if stream.cursor == len(stream.batches):
                 loss_epoch += 1
                 loss_step = 0
             optimizer.zero_grad(set_to_none=True)

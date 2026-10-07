@@ -73,14 +73,15 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
     accumulation = training["gradient_accumulation_steps"]
     dropout = config["dataset"]["caption_dropout_rate"]
     print(f"학습 가능 파라미터: {sum(p.numel() for p in parameters):,}")
-    print(f"최대 batch={batch_size}, accumulation={accumulation}; 크기별 잔여 배치는 더 작을 수 있습니다.")
+    samples_per_update = batch_size * accumulation
+    print(f"이미지 1장씩 계산, 업데이트당 {samples_per_update}장 누적 (batch={batch_size}, accumulation={accumulation})")
     progress = tqdm(total=training["max_steps"], initial=step, desc="LoRA optimizer 업데이트")
     try:
         while step < training["max_steps"]:
             started = time.monotonic()
             loss_epoch = stream.epoch
-            loss_step = stream.cursor // accumulation
-            if stream.cursor == len(stream.batches):
+            loss_step = stream.cursor // samples_per_update
+            if stream.cursor == len(stream.order):
                 loss_epoch += 1
                 loss_step = 0
             optimizer.zero_grad(set_to_none=True)
@@ -88,17 +89,18 @@ def train_model(model, config, dataset, output_dir, resume_from=None, device="cu
             lr = optimizer.param_groups[0]["lr"]
             for _ in range(accumulation):
                 samples = stream.take(batch_size)
-                conditions = [dataset.empty if torch.rand(()).item() < dropout else sample for sample in samples]
-                latent = torch.stack([sample["latent"] for sample in samples]).to(device=device, dtype=dtype)
-                embeds = torch.stack([condition["crossattn_emb"] for condition in conditions]).to(device=device, dtype=dtype)
-                with torch.autocast(device_type=device.type, dtype=dtype, enabled=dtype != torch.float32):
-                    loss = loss_fn(model, latent, embeds, None,
-                                   config["runtime"]["use_gradient_checkpointing"])
-                if not torch.isfinite(loss):
-                    raise RuntimeError("loss에 비유한 값이 있습니다. precision과 학습률을 확인하세요.")
-                total_loss += float(loss.detach()) / accumulation
-                scaler.scale(loss / accumulation).backward()
-                del loss, latent, embeds
+                for sample in samples:
+                    condition = dataset.empty if torch.rand(()).item() < dropout else sample
+                    latent = sample["latent"].unsqueeze(0).to(device=device, dtype=dtype)
+                    embeds = condition["crossattn_emb"].unsqueeze(0).to(device=device, dtype=dtype)
+                    with torch.autocast(device_type=device.type, dtype=dtype, enabled=dtype != torch.float32):
+                        loss = loss_fn(model, latent, embeds, None,
+                                       config["runtime"]["use_gradient_checkpointing"])
+                    if not torch.isfinite(loss):
+                        raise RuntimeError("loss에 비유한 값이 있습니다. precision과 학습률을 확인하세요.")
+                    total_loss += float(loss.detach()) / samples_per_update
+                    scaler.scale(loss / samples_per_update).backward()
+                    del loss, latent, embeds
             old_scale = scaler.get_scale()
             if training["max_grad_norm"] != 0:
                 scaler.unscale_(optimizer)

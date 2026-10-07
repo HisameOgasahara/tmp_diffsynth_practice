@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 from .preprocessing import discover_pairs, preprocess_images
 
 
-CACHE_VERSION = 4
+CACHE_VERSION = 7
 
 
 def read_image(path):
@@ -53,9 +53,10 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda", prepro
         model_signatures[name] = {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     identity = {
         "version": CACHE_VERSION, "pairs": signatures, "weights": model_signatures,
-        "max_pixels": config["dataset"]["max_pixels"], "text_dtype": str(dtype),
+        "target_res": image_manifest["identity"]["target_res"],
+        "freefit_max_ratio": image_manifest["identity"]["freefit_max_ratio"], "text_dtype": str(dtype),
         "preprocessing_fingerprint": image_manifest["fingerprint"],
-        "preprocess": "exif_rgb_dynamic_center_crop_bilinear", "max_sequence_length": 512,
+        "preprocess": image_manifest["identity"]["preprocess"], "max_sequence_length": 512,
     }
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     cache_path = Path(cache_dir).expanduser().resolve() / fingerprint
@@ -164,7 +165,7 @@ class CachedDataset(Dataset):
 
 
 class SampleStream:
-    """크기별 배치를 섞고 epoch·cursor로 동일한 다음 배치를 복원합니다."""
+    """전체 반복본을 섞고 epoch·cursor로 동일한 다음 샘플을 복원합니다."""
 
     def __init__(self, dataset, repeat, seed, batch_size, epoch=0, cursor=0):
         self.dataset = dataset
@@ -177,27 +178,21 @@ class SampleStream:
 
     def _set_order(self):
         generator = torch.Generator().manual_seed(self.seed + self.epoch)
-        buckets = {}
-        for index, key in enumerate(self.dataset.bucket_keys):
-            buckets.setdefault(key, []).extend([index] * self.repeat)
-        batches = []
-        for indices in buckets.values():
-            shuffled = [indices[i] for i in torch.randperm(len(indices), generator=generator).tolist()]
-            batches.extend(shuffled[start:start + self.batch_size]
-                           for start in range(0, len(shuffled), self.batch_size))
-        self.batches = [batches[i] for i in torch.randperm(len(batches), generator=generator).tolist()]
-        self.order = [index for batch in self.batches for index in batch]
+        self.order = torch.randperm(len(self.dataset) * self.repeat, generator=generator).tolist()
 
     def take(self, batch_size):
         if batch_size != self.batch_size:
             raise ValueError("배치 크기는 SampleStream 생성 시 설정한 값과 같아야 합니다.")
-        if self.cursor == len(self.batches):
-            self.epoch += 1
-            self.cursor = 0
-            self._set_order()
-        indices = self.batches[self.cursor]
-        self.cursor += 1
-        return [self.dataset[index] for index in indices]
+        samples = []
+        for _ in range(batch_size):
+            if self.cursor == len(self.order):
+                self.epoch += 1
+                self.cursor = 0
+                self._set_order()
+            index = self.order[self.cursor] % len(self.dataset)
+            samples.append(self.dataset[index])
+            self.cursor += 1
+        return samples
 
     def state_dict(self):
         return {"epoch": self.epoch, "cursor": self.cursor}

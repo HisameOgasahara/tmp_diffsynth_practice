@@ -379,7 +379,7 @@ class TrainingTests(unittest.TestCase):
         self.assertTrue(torch.all(inference[0] == 1))
         self.assertNotIn("padding", t5.calls[1][1])
 
-    def test_trainer_calls_model_once_per_full_batch(self):
+    def test_trainer_accumulates_one_image_at_a_time(self):
         config = make_config()
         config["training"]["max_steps"] = 2
         config["dataset"]["caption_dropout_rate"] = 0
@@ -399,7 +399,7 @@ class TrainingTests(unittest.TestCase):
             train_model(model, config, make_dataset(root / "cache"), root / "output",
                         device="cpu", tensorboard=False)
         hook.remove()
-        self.assertEqual(batch_shapes, [(2, torch.Size([2, 512, 4]))] * 4)
+        self.assertEqual(batch_shapes, [(1, torch.Size([1, 512, 4]))] * 8)
 
     def test_trainer_clips_once_after_accumulation_before_optimizer_step(self):
         config = make_config()
@@ -439,7 +439,8 @@ class TrainingTests(unittest.TestCase):
             train_model(model, config, make_dataset(root / "cache"), root / "output",
                         device="cpu", tensorboard=False)
         hook.remove()
-        self.assertEqual(events, ["forward", "forward", "unscale", "clip", "step"] * 2)
+        self.assertEqual(events, ["forward"] * 4 + ["unscale", "clip", "step"]
+                         + ["forward"] * 4 + ["unscale", "clip", "step"])
 
     def test_existing_dit_blocks_backpropagate_with_checkpoint(self):
         from anima_core.anima_dit import MiniTrainDIT
@@ -473,7 +474,7 @@ class TrainingTests(unittest.TestCase):
                 return torch.full((*target_input_ids.shape, 4), 7.0)
 
         config = make_config()
-        config["dataset"]["max_pixels"] = 1024
+        config["dataset"]["max_pixels"] = 262144
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             data = root / "data"
@@ -493,10 +494,11 @@ class TrainingTests(unittest.TestCase):
                      torch.arange(512).unsqueeze(0) < 3, torch.arange(512).unsqueeze(0) < 2)):
                 cache = prepare_cache(config, data, root / "cache", weights, "cpu")
                 dataset = CachedDataset(cache)
-                self.assertEqual(dataset[0]["latent"].shape, (16, 1, 2, 4))
+                width, height = choose_image_size(64, 32, [512])
+                self.assertEqual(dataset[0]["latent"].shape, (16, 1, height // 8, width // 8))
                 self.assertEqual(set(dataset[0]), {"latent", "crossattn_emb"})
                 self.assertEqual(set(dataset.empty), {"crossattn_emb"})
-                self.assertEqual(dataset.manifest["identity"]["version"], 4)
+                self.assertEqual(dataset.manifest["identity"]["version"], 7)
                 for tensors in (dataset[0], dataset.empty):
                     self.assertEqual(tensors["crossattn_emb"].shape, (512, 4))
                     self.assertTrue(torch.all(tensors["crossattn_emb"][:2] == 7))
@@ -568,22 +570,20 @@ class TrainingTests(unittest.TestCase):
                 self.assertIsNone(cell["execution_count"])
                 compile("".join(cell["source"]), f"notebook:{cell['id']}", "exec")
 
-    def test_dynamic_resize_preserves_head_and_limits_area(self):
+    def test_anima_resize_uses_target_tiers_and_preserves_head(self):
         image = Image.new("RGB", (64, 128), "white")
         image.paste("red", (0, 0, 64, 16))
-        processed = resize_image(image, 2048)
-        self.assertEqual(processed.size, (32, 64))
-        self.assertEqual(processed.getpixel((16, 2)), (255, 0, 0))
+        processed = resize_image(image, [1024, 896])
+        self.assertEqual(processed.size, choose_image_size(64, 128, [1024, 896]))
+        self.assertEqual(processed.getpixel((processed.width // 2, 2)), (255, 0, 0))
+        self.assertGreater(processed.width, 64)
         for width, height in ((1176, 2160), (2428, 1368), (684, 743), (64, 32)):
-            target = choose_image_size(width, height, 262144)
+            target = choose_image_size(width, height, [1024, 896])
             self.assertTrue(all(side % 16 == 0 for side in target))
-            self.assertLessEqual(target[0] * target[1], 262144)
-            self.assertLessEqual(target[0], width)
-            self.assertLessEqual(target[1], height)
 
     def test_preprocessed_files_reuse_and_caption_changes(self):
         config = make_config()
-        config["dataset"]["max_pixels"] = 2048
+        config["dataset"]["max_pixels"] = 262144
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "original"
@@ -594,7 +594,7 @@ class TrainingTests(unittest.TestCase):
             before = (source / "image.png").read_bytes()
             result = preprocess_images(config, source, root / "processed")
             with Image.open(result / "0000000.png") as image:
-                self.assertEqual(image.size, (32, 64))
+                self.assertEqual(image.size, choose_image_size(64, 128, [512]))
             self.assertEqual((result / "0000000.txt").read_text(), "first")
             self.assertEqual((source / "image.png").read_bytes(), before)
             image_time = (result / "0000000.png").stat().st_mtime_ns
@@ -605,9 +605,12 @@ class TrainingTests(unittest.TestCase):
             self.assertNotEqual(changed, result)
             self.assertEqual((changed / "0000000.txt").read_text(), "second")
 
-    def test_bucket_stream_covers_all_samples_and_resumes(self):
+    def test_global_stream_covers_all_samples_and_resumes(self):
         class Dataset:
-            bucket_keys = [(32, 64), (64, 32), (32, 64), (80, 16)]
+            bucket_keys = [(32, 64), (64, 32), (32, 64), (80, 16), (16, 80)]
+
+            def __len__(self):
+                return len(self.bucket_keys)
 
             def __getitem__(self, index):
                 return index
@@ -615,14 +618,15 @@ class TrainingTests(unittest.TestCase):
         dataset = Dataset()
         stream = SampleStream(dataset, repeat=3, seed=42, batch_size=4)
         observed = []
-        for _ in range(len(stream.batches)):
+        batches = []
+        for _ in range(4):
             batch = stream.take(4)
-            self.assertEqual(len({dataset.bucket_keys[index] for index in batch}), 1)
-            self.assertLessEqual(len(batch), 4)
+            self.assertEqual(len(batch), 4)
+            batches.append(batch)
             observed.extend(batch)
-        self.assertEqual(sorted(observed), sorted(list(range(4)) * 3))
-        self.assertTrue(any(len(batch) < 4 for batch in stream.batches))
-        stream.take(4)
+        self.assertEqual(sorted(observed[:15]), sorted(list(range(5)) * 3))
+        self.assertTrue(any(len({dataset.bucket_keys[index] for index in batch}) > 1 for batch in batches))
+        self.assertEqual(stream.state_dict(), {"epoch": 1, "cursor": 1})
         restored = SampleStream(dataset, repeat=3, seed=42, batch_size=4, **stream.state_dict())
         for _ in range(10):
             self.assertEqual(stream.take(4), restored.take(4))

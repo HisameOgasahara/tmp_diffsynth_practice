@@ -2,14 +2,15 @@
 
 import hashlib
 import json
-import math
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
+from .anima_image import DEFAULT_CROP_ANCHOR, DEFAULT_FREEFIT_MAX_RATIO, select_bucket, resize_to_bucket
+
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-PREPROCESS_VERSION = 1
+PREPROCESS_VERSION = 4
 SIZE_MULTIPLE = 16
 
 
@@ -28,30 +29,21 @@ def discover_pairs(dataset_dir):
     return pairs
 
 
-def choose_image_size(width, height, max_pixels):
-    """DiffSynth 방식: 면적 상한으로 축소 후 각 변을 16의 배수로 내립니다."""
-    scale = min(1.0, math.sqrt(max_pixels / (width * height)))
-    target_width = int(width * scale) // SIZE_MULTIPLE * SIZE_MULTIPLE
-    target_height = int(height * scale) // SIZE_MULTIPLE * SIZE_MULTIPLE
-    if min(target_width, target_height) < SIZE_MULTIPLE:
-        raise ValueError("전처리 후 한 변이 16픽셀 미만입니다. max_pixels 또는 원본 크기를 확인하세요.")
-    return target_width, target_height
+def choose_image_size(width, height, target_res, freefit_max_ratio=DEFAULT_FREEFIT_MAX_RATIO):
+    """anima-lora가 사용하는 원본 select_bucket 함수로 크기를 선택합니다."""
+    return select_bucket(width, height, target_res, max_ratio=freefit_max_ratio)[1]
 
 
-def resize_image(image, max_pixels):
+def resize_image(image, target_res, freefit_max_ratio=DEFAULT_FREEFIT_MAX_RATIO):
+    # anime_tools.stages.resize.process_image의 기본 margin=0 경로.
     image = ImageOps.exif_transpose(image).convert("RGB")
-    width, height = image.size
-    target_width, target_height = choose_image_size(width, height, max_pixels)
-    scale = max(target_width / width, target_height / height)
-    scaled = image.resize((round(width * scale), round(height * scale)), Image.Resampling.BILINEAR)
-    left = (scaled.width - target_width) // 2
-    top = (scaled.height - target_height) // 2
-    return scaled.crop((left, top, left + target_width, top + target_height))
+    bucket = choose_image_size(*image.size, target_res, freefit_max_ratio)
+    return resize_to_bucket(image, bucket, crop_anchor=DEFAULT_CROP_ANCHOR)
 
 
 def preprocess_images(config, dataset_dir, output_dir):
     """CPU 전처리. 입력별 폴더를 구분하며 manifest를 마지막에 저장합니다."""
-    from .config import validate_config
+    from .config import resolve_preprocess_target_res, validate_config
 
     validate_config(config)
     root = Path(dataset_dir).expanduser().resolve()
@@ -64,8 +56,10 @@ def preprocess_images(config, dataset_dir, output_dir):
         stat = Path(pair["image"]).stat()
         signatures.append({**pair, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
     identity = {"version": PREPROCESS_VERSION, "pairs": signatures,
-                "max_pixels": config["dataset"]["max_pixels"], "size_multiple": SIZE_MULTIPLE,
-                "preprocess": "exif_rgb_dynamic_center_crop_bilinear"}
+                "target_res": resolve_preprocess_target_res(config),
+                "freefit_max_ratio": DEFAULT_FREEFIT_MAX_RATIO,
+                "crop_anchor": DEFAULT_CROP_ANCHOR, "size_multiple": SIZE_MULTIPLE,
+                "preprocess": "anime_tools_74aa014ba12db74286b17e634056683f7f2b44d7"}
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     target = output_root / fingerprint
     manifest_path = target / "preprocessing.json"
@@ -83,7 +77,7 @@ def preprocess_images(config, dataset_dir, output_dir):
         caption_file = f"{index:07d}.txt"
         with Image.open(pair["image"]) as image:
             source_size = ImageOps.exif_transpose(image).size
-            processed = resize_image(image, identity["max_pixels"])
+            processed = resize_image(image, identity["target_res"], identity["freefit_max_ratio"])
         processed.save(target / filename)
         (target / caption_file).write_text(pair["caption"], encoding="utf-8")
         records.append({"file": filename, "caption_file": caption_file, "source": pair["image"],

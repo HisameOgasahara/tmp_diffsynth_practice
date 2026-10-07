@@ -25,6 +25,17 @@ def write_config(path, config):
     Path(path).write_text("\n".join(lines), encoding="utf-8")
 
 
+def resolve_preprocess_target_res(config):
+    """기존 TOML의 제곱 픽셀 면적을 anima-lora의 해상도 기준으로 읽습니다."""
+    from .anima_image import ALLOWED_TARGET_RES
+
+    max_pixels = config["dataset"]["max_pixels"]
+    edge = math.isqrt(max_pixels)
+    if edge * edge != max_pixels or edge not in ALLOWED_TARGET_RES:
+        raise ValueError(f"max_pixels에는 anima-lora 해상도 기준 {ALLOWED_TARGET_RES}의 제곱을 지정하세요.")
+    return [edge]
+
+
 def validate_config(config):
     fields = {
         "dataset": {"max_pixels", "batch_size", "repeat", "caption_dropout_rate"},
@@ -50,8 +61,7 @@ def validate_config(config):
         value = config[section][key]
         if type(value) is not int or value < 1:
             raise ValueError(f"{section}.{key}는 양의 정수여야 합니다.")
-    if config["dataset"]["max_pixels"] < 256:
-        raise ValueError("max_pixels는 256 이상이어야 합니다. 이전 resolution 설정은 max_pixels로 바꾸세요.")
+    resolve_preprocess_target_res(config)
     for section, key, minimum, maximum in (
         ("dataset", "caption_dropout_rate", 0, 1),
         ("training", "warmup_ratio", 0, 1),

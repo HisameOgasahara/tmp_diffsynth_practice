@@ -53,7 +53,7 @@ def prepare_cache(config, dataset_dir, cache_dir, weights, device="cuda", prepro
         model_signatures[name] = {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
     identity = {
         "version": CACHE_VERSION, "pairs": signatures, "weights": model_signatures,
-        "target_res": image_manifest["identity"]["target_res"],
+        "max_pixels": config["dataset"]["max_pixels"],
         "freefit_max_ratio": image_manifest["identity"]["freefit_max_ratio"], "text_dtype": str(dtype),
         "preprocessing_fingerprint": image_manifest["fingerprint"],
         "preprocess": image_manifest["identity"]["preprocess"], "max_sequence_length": 512,

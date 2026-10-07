@@ -26,7 +26,6 @@ def write_config(path, config):
 
 
 def resolve_preprocess_target_res(config):
-    """기존 TOML의 제곱 픽셀 면적을 anima-lora의 해상도 기준으로 읽습니다."""
     from .anima_image import ALLOWED_TARGET_RES
 
     max_pixels = config["dataset"]["max_pixels"]

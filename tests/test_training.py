@@ -494,7 +494,7 @@ class TrainingTests(unittest.TestCase):
                      torch.arange(512).unsqueeze(0) < 3, torch.arange(512).unsqueeze(0) < 2)):
                 cache = prepare_cache(config, data, root / "cache", weights, "cpu")
                 dataset = CachedDataset(cache)
-                width, height = choose_image_size(64, 32, [512])
+                width, height = choose_image_size(64, 32, 262144)
                 self.assertEqual(dataset[0]["latent"].shape, (16, 1, height // 8, width // 8))
                 self.assertEqual(set(dataset[0]), {"latent", "crossattn_emb"})
                 self.assertEqual(set(dataset.empty), {"crossattn_emb"})
@@ -570,15 +570,15 @@ class TrainingTests(unittest.TestCase):
                 self.assertIsNone(cell["execution_count"])
                 compile("".join(cell["source"]), f"notebook:{cell['id']}", "exec")
 
-    def test_anima_resize_uses_target_tiers_and_preserves_head(self):
+    def test_freefit_size_upscales_and_preserves_head(self):
         image = Image.new("RGB", (64, 128), "white")
         image.paste("red", (0, 0, 64, 16))
-        processed = resize_image(image, [1024, 896])
-        self.assertEqual(processed.size, choose_image_size(64, 128, [1024, 896]))
+        processed = resize_image(image, 262144)
+        self.assertEqual(processed.size, choose_image_size(64, 128, 262144))
         self.assertEqual(processed.getpixel((processed.width // 2, 2)), (255, 0, 0))
         self.assertGreater(processed.width, 64)
         for width, height in ((1176, 2160), (2428, 1368), (684, 743), (64, 32)):
-            target = choose_image_size(width, height, [1024, 896])
+            target = choose_image_size(width, height, 262144)
             self.assertTrue(all(side % 16 == 0 for side in target))
 
     def test_preprocessed_files_reuse_and_caption_changes(self):
@@ -594,7 +594,7 @@ class TrainingTests(unittest.TestCase):
             before = (source / "image.png").read_bytes()
             result = preprocess_images(config, source, root / "processed")
             with Image.open(result / "0000000.png") as image:
-                self.assertEqual(image.size, choose_image_size(64, 128, [512]))
+                self.assertEqual(image.size, choose_image_size(64, 128, 262144))
             self.assertEqual((result / "0000000.txt").read_text(), "first")
             self.assertEqual((source / "image.png").read_bytes(), before)
             image_time = (result / "0000000.png").stat().st_mtime_ns

@@ -2,15 +2,16 @@
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from .anima_image import DEFAULT_CROP_ANCHOR, DEFAULT_FREEFIT_MAX_RATIO, select_bucket, resize_to_bucket
+from .anima_image import DEFAULT_FREEFIT_MAX_RATIO, select_bucket
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-PREPROCESS_VERSION = 4
+PREPROCESS_VERSION = 5
 SIZE_MULTIPLE = 16
 
 
@@ -29,21 +30,25 @@ def discover_pairs(dataset_dir):
     return pairs
 
 
-def choose_image_size(width, height, target_res, freefit_max_ratio=DEFAULT_FREEFIT_MAX_RATIO):
-    """anima-lora가 사용하는 원본 select_bucket 함수로 크기를 선택합니다."""
-    return select_bucket(width, height, target_res, max_ratio=freefit_max_ratio)[1]
+def choose_image_size(width, height, max_pixels):
+    return select_bucket(width, height, [math.isqrt(max_pixels)],
+                         max_ratio=DEFAULT_FREEFIT_MAX_RATIO)[1]
 
 
-def resize_image(image, target_res, freefit_max_ratio=DEFAULT_FREEFIT_MAX_RATIO):
-    # anime_tools.stages.resize.process_image의 기본 margin=0 경로.
+def resize_image(image, max_pixels):
     image = ImageOps.exif_transpose(image).convert("RGB")
-    bucket = choose_image_size(*image.size, target_res, freefit_max_ratio)
-    return resize_to_bucket(image, bucket, crop_anchor=DEFAULT_CROP_ANCHOR)
+    width, height = image.size
+    target_width, target_height = choose_image_size(width, height, max_pixels)
+    scale = max(target_width / width, target_height / height)
+    scaled = image.resize((round(width * scale), round(height * scale)), Image.Resampling.BILINEAR)
+    left = (scaled.width - target_width) // 2
+    top = (scaled.height - target_height) // 2
+    return scaled.crop((left, top, left + target_width, top + target_height))
 
 
 def preprocess_images(config, dataset_dir, output_dir):
     """CPU 전처리. 입력별 폴더를 구분하며 manifest를 마지막에 저장합니다."""
-    from .config import resolve_preprocess_target_res, validate_config
+    from .config import validate_config
 
     validate_config(config)
     root = Path(dataset_dir).expanduser().resolve()
@@ -56,10 +61,9 @@ def preprocess_images(config, dataset_dir, output_dir):
         stat = Path(pair["image"]).stat()
         signatures.append({**pair, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
     identity = {"version": PREPROCESS_VERSION, "pairs": signatures,
-                "target_res": resolve_preprocess_target_res(config),
+                "max_pixels": config["dataset"]["max_pixels"], "size_multiple": SIZE_MULTIPLE,
                 "freefit_max_ratio": DEFAULT_FREEFIT_MAX_RATIO,
-                "crop_anchor": DEFAULT_CROP_ANCHOR, "size_multiple": SIZE_MULTIPLE,
-                "preprocess": "anime_tools_74aa014ba12db74286b17e634056683f7f2b44d7"}
+                "preprocess": "freefit_size_bilinear_center_crop"}
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     target = output_root / fingerprint
     manifest_path = target / "preprocessing.json"
@@ -77,7 +81,7 @@ def preprocess_images(config, dataset_dir, output_dir):
         caption_file = f"{index:07d}.txt"
         with Image.open(pair["image"]) as image:
             source_size = ImageOps.exif_transpose(image).size
-            processed = resize_image(image, identity["target_res"], identity["freefit_max_ratio"])
+            processed = resize_image(image, identity["max_pixels"])
         processed.save(target / filename)
         (target / caption_file).write_text(pair["caption"], encoding="utf-8")
         records.append({"file": filename, "caption_file": caption_file, "source": pair["image"],

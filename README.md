@@ -95,4 +95,5 @@ Anima를 대상으로 DiT(Diffusion Transformer)·플로우 매칭(FM)을 학습
 |---|---|
 | [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio) | 교재 및 Anima 모델 구현 출처 · Apache-2.0 |
 | [anima-lora](https://github.com/sorryhyun/anima_lora) | LoRA 학습 구현 참고 |
-| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Anima 이미지 생성 참고, 샘플러 갱신식·Brownian noise 구현 출처 · [GPL-3.0](licenses/ComfyUI-LICENSE) |
+| [anime_tools](https://github.com/sorryhyun/anime_tools) | 이미지 크기 선택 코드 출처 · MIT |
+| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Anima 이미지 생성 참고, 샘플러 갱신식·Brownian noise 구현 출처 · GPL-3.0 |

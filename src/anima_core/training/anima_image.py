@@ -1,5 +1,3 @@
-# Source: sorryhyun/anime_tools, commit 74aa014ba12db74286b17e634056683f7f2b44d7 (v0.7.5).
-# License: licenses/anime-tools-LICENSE.
 
 
 from __future__ import annotations
